@@ -1182,13 +1182,22 @@ async function getApiKey() {
 }
 
 // 单次 fetch：POST base+path + x-api-key，401 抛 API_KEY_INVALID。
+// 30s AbortController 超时：SW 的 fetch 无浏览器 UI 超时兜底，挂死请求会拖住整个采集轮（锁不释放）。
 async function _mtFetchOnce(base, path, body) {
   const token = await getApiKey();
-  const res = await fetch('https://' + base + path, {
-    method: 'POST',
-    headers: { 'x-api-key': token, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body || {}),
-  });
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 30000);
+  let res;
+  try {
+    res = await fetch('https://' + base + path, {
+      method: 'POST',
+      headers: { 'x-api-key': token, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {}),
+      signal: ctrl.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
   const json = await res.json().catch(() => ({}));
   if (res.status === 401 || String(json.code) === '401') throw new Error('API_KEY_INVALID');
   return json;

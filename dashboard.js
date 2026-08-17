@@ -4585,9 +4585,16 @@ function buildModalHero(it) {
 // 自建模态窗（替代原生 confirm）：返回 Promise<boolean>
 // 点遮罩 / Esc / 取消按钮 = false；确认按钮 / 聚焦时回车 = true
 // opts.hero(节点) 优先，替代默认 icon+title 头部（购买时展示海报）
+// modal 焦点管理：打开时记录触发元素并 focus 首控件，关闭后归还焦点（键盘用户不丢上下文）
+function modalFocusRestore() {
+  const prior = document.activeElement;
+  return function restore() { try { if (prior && prior.focus) prior.focus(); } catch (e) {} };
+}
+
 function confirmDialog(opts) {
   opts = opts || {};
   return new Promise((resolve) => {
+    const restoreFocus = modalFocusRestore();
     const mask = el('div', { cls: 'modal-mask' });
     const box = el('div', { cls: 'modal' });
     if (opts.hero) {
@@ -4622,7 +4629,7 @@ function confirmDialog(opts) {
       if (done) return; done = true;
       document.removeEventListener('keydown', onKey);
       mask.classList.remove('show');
-      setTimeout(() => mask.remove(), 220);
+      setTimeout(() => { mask.remove(); restoreFocus(); }, 220);
       resolve(result);
     }
     const onKey = (e) => { if (e.key === 'Escape') close(false); };
@@ -4637,6 +4644,7 @@ function confirmDialog(opts) {
 function choiceDialog(opts) {
   opts = opts || {};
   return new Promise((resolve) => {
+    const restoreFocus = modalFocusRestore();
     const mask = el('div', { cls: 'modal-mask' });
     const box = el('div', { cls: 'modal' });
     if (opts.hero) box.appendChild(opts.hero);
@@ -4657,8 +4665,9 @@ function choiceDialog(opts) {
     mask.appendChild(box);
     document.body.appendChild(mask);
     requestAnimationFrame(() => mask.classList.add('show'));
+    setTimeout(() => { try { opt2.focus(); } catch (e) {} }, 60);   // 打开 focus 首控件
     let done = false;
-    function close(result) { if (done) return; done = true; document.removeEventListener('keydown', onKey); mask.classList.remove('show'); setTimeout(() => mask.remove(), 220); resolve(result); }
+    function close(result) { if (done) return; done = true; document.removeEventListener('keydown', onKey); mask.classList.remove('show'); setTimeout(() => { mask.remove(); restoreFocus(); }, 220); resolve(result); }
     const onKey = (e) => { if (e.key === 'Escape') close(null); };
     document.addEventListener('keydown', onKey);
     opt1.onclick = () => close('1');
@@ -5080,7 +5089,7 @@ function closeThresholdModal() {
 function showToast(msg, type, duration) {
   type = (type === 'error' || type === 'info') ? type : 'success';
   let wrap = document.querySelector('.toast-wrap');
-  if (!wrap) { wrap = el('div', { cls: 'toast-wrap' }); document.body.appendChild(wrap); }
+  if (!wrap) { wrap = el('div', { cls: 'toast-wrap', attrs: { role: 'status', 'aria-live': 'polite' } }); document.body.appendChild(wrap); }
   const t = el('div', { cls: 'toast ' + type });
   const icon = type === 'error' ? '!' : type === 'info' ? 'i' : '✓';
   append(t,

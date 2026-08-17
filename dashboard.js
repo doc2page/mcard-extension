@@ -351,6 +351,24 @@ function renderToolbar() {
   const cbv = $('cardBookView');
   if (cbv) cbv.style.display = isCardBook ? '' : 'none';
 }
+// 市场刷新统一入口：所有触发路径（按钮/切回市场/初始加载/改 pageSize/批量买入后）都走这里。
+// 8s 节流（连点只刷一次防滥用，与 background market 冷却对齐）+ 刷新按钮 spin 同步（API 返回即停）——
+// 任何路径在刷，按钮都转，一目了然。force=true 绕节流（批量买入后/保存 key 后）。
+var _lastMarketRefreshAt = 0;
+function triggerMarketRefresh(force) {
+  if (!state || !state.mtApiKey) return;
+  var now = Date.now();
+  if (!force && now - _lastMarketRefreshAt < 8000) return;   // 节流：冷却内静默忽略
+  _lastMarketRefreshAt = now;
+  var p = hasSearchTags() ? runSearch() : send({ type: 'REFRESH_NOW' });
+  var rbtn = $('refreshBtn');
+  if (rbtn) {
+    rbtn.classList.add('refreshing');
+    var stop = () => rbtn.classList.remove('refreshing');
+    Promise.resolve(p).then(stop, stop);
+  }
+}
+
 function toggleView(v) {
   view = v;
   if (batchInView && batchInView !== v) clearBatchSelection(false);  // 切 view 清批量选择（renderLive 会重绘新 view）
@@ -359,8 +377,8 @@ function toggleView(v) {
   const grid = $('grid');
   if (grid) grid._sig = null;
   renderLive();
-  // 回到市场视图时刷新：有定向 tag → runSearch；否则 → triggerRefreshRound
-  if (v === 'market' && state && state.mtApiKey) { if (hasSearchTags()) runSearch(); else send({ type: 'REFRESH_NOW' }); }
+  // 回到市场视图时刷新（统一入口：节流+按钮 spin 同步）
+  if (v === 'market') triggerMarketRefresh();
 }
 
 // 聚合各数据源算画像（资料卡称号/氛围色 + 画像页复用）
@@ -3809,6 +3827,9 @@ function clearBatchSelection(rerender) {
 function initBatch() {
   initBatchModal();
   $('batchFloatClear').onclick = () => clearBatchSelection(true);
+  // 市场刷新按钮（统一入口；spin 与请求生命周期同步在 triggerMarketRefresh 内处理）
+  const rbtn = $('refreshBtn');
+  if (rbtn) rbtn.onclick = () => triggerMarketRefresh();
 }
 
 // ============ 批量操作：模态骨架 ============
@@ -3954,7 +3975,7 @@ async function runBatchOp() {
   toggleBatchInputs(false);
   renderBatchFooter();
   if (batchState.op === 'buy') {  // buy 影响交易记录 + 预算(storage.onChanged 自动) + 市场网格；不刷挂单/持有
-    send({ type: 'REFRESH_NOW' });
+    triggerMarketRefresh(true);   // 绕节流（刚买完该立即看到市场变化）
     send({ type: 'LOAD_TRADES' });
   } else {
     send({ type: 'LOAD_ORDERS' });
@@ -3967,7 +3988,7 @@ async function retryOne(item) {
   batchState.running = true; toggleBatchInputs(true);
   await runBatch([item], paintBatchRowStatus, function () { return batchState.aborted; });
   batchState.running = false; toggleBatchInputs(false); renderBatchFooter();
-  if (batchState.op === 'buy') { send({ type: 'REFRESH_NOW' }); send({ type: 'LOAD_TRADES' }); }
+  if (batchState.op === 'buy') { triggerMarketRefresh(true); send({ type: 'LOAD_TRADES' }); }
   else { send({ type: 'LOAD_ORDERS' }); if (batchState.op !== 'cancel') send({ type: 'LOAD_INVENTORY' }); }
 }
 async function retryAllFailed() {
@@ -3976,7 +3997,7 @@ async function retryAllFailed() {
   batchState.running = true; toggleBatchInputs(true);
   await runBatch(failed, paintBatchRowStatus, function () { return batchState.aborted; });
   batchState.running = false; toggleBatchInputs(false); renderBatchFooter();
-  if (batchState.op === 'buy') { send({ type: 'REFRESH_NOW' }); send({ type: 'LOAD_TRADES' }); }
+  if (batchState.op === 'buy') { triggerMarketRefresh(true); send({ type: 'LOAD_TRADES' }); }
   else { send({ type: 'LOAD_ORDERS' }); if (batchState.op !== 'cancel') send({ type: 'LOAD_INVENTORY' }); }
 }
 function toggleBatchInputs(disabled) {
@@ -4061,6 +4082,15 @@ function openBatchModify() {
 function openBatchBuy() {
   var cards = marketSelectedItems();
   if (!cards.length) return;
+  // 前置预算校验（与单卡 onBuy / runBatchOp 同口径，带指引）：未设预算池 / 可用额度小于所选总价 → 直接 toast，不开模态
+  var u = computeUsable(state);
+  if (u.bTotal <= 0) { showToast(t('err.buyBudgetNotSet'), 'error'); return; }
+  var sum = cards.reduce(function (a, c) { return a + (Number(c.lowestAsk) || 0); }, 0);
+  if (sum > u.usable) {
+    var reason = u.bonus < u.remaining ? t('err.balanceInsufficient') : t('err.budgetRemainingInsufficient');
+    showToast(reason + t('err.buyBudgetInsufficientToast', { price: fmtNum(sum), usable: fmtNum(u.usable) }), 'error');
+    return;
+  }
   openBatchModal('buy', cards.map(function (c) { return makeBatchItem('buy', c, 0); }));
 }
 
@@ -4403,10 +4433,14 @@ async function removeSearchTag(tag) {
 }
 
 // 发起定向搜索：串行查所有 tag → 合并去重 → 一次渲染。pageSize 用页面选的 listPageSize。
+// 2s 节流（防连打搜索接口触发风控；seq 丢弃旧结果不挡连发）。
 async function runSearch() {
   const tags = ((state.config && state.config.searchTags) || []);
   if (!tags.length) { searchResults = null; searching = false; renderCards(); return; }
   if (!state.mtApiKey) return;
+  const _now = Date.now();
+  if (runSearch._lastAt && _now - runSearch._lastAt < 2000) return;
+  runSearch._lastAt = _now;
   const seq = ++_searchSeq;
   searching = true;
   renderCards();  // 立即显示 loading
@@ -4635,94 +4669,102 @@ function choiceDialog(opts) {
 
 // 挂单修改：弹选择窗（取消挂单 / 修改挂单价）。改价 = cancel + 新价重新 sell
 async function onOrderModify(it) {
-  const body = el('div');
-  // 当前挂单价（改价参考）—— it.price 与挂单卡片同源（挂单价 = 净收入 × 1.05）
-  const cur = (it.price != null && it.price !== '') ? Number(it.price) : NaN;
-  if (Number.isFinite(cur)) {
-    const priceLine = el('div', { cls: 'modal-price-line' });
-    append(priceLine,
-      el('span', { cls: 'modal-price-label', text: t('order.currentPrice') }),
-      el('b', { cls: 'modal-price', text: fmtNum(cur) }),
-      el('span', { cls: 'modal-price-unit', text: t('common.magic') })
-    );
-    body.appendChild(priceLine);
-  }
-  append(body, el('div', { cls: 'modal-note', text: t('order.modifyChoiceHint') }));
-  const choice = await choiceDialog({
-    hero: buildModalHero(it), body: body,
-    option1Text: t('order.cancelOrder'), option1Variant: 'sell',
-    option2Text: t('order.modifyPrice'), option2Variant: 'primary',
-  });
-  if (choice === '1') {
-    const r = await send({ type: 'CANCEL_ORDER', orderId: it.id });
-    showToast(r && r.ok ? t('order.cancelSuccess') : t('order.cancelFailed'), r && r.ok ? 'success' : 'error');
-  } else if (choice === '2') {
-    const netPrice = await promptSellPrice(it);
-    if (netPrice == null) return;
-    const cr = await send({ type: 'CANCEL_ORDER', orderId: it.id });
-    if (!cr || !cr.ok) { showToast(t('order.cancelFailed'), 'error'); return; }
-    const sr = await send({ type: 'SELL_CARD', cardId: it.cardId, isMech: isMechCard(it), netPrice: netPrice });
-    if (sr && sr.ok) { await send({ type: 'LOAD_ORDERS' }); showToast(t('order.modifySuccess'), 'success'); }
-    else showToast(t('order.modifyFailed'), 'error');
-  }
+  if (onOrderModify._busy) return;   // 单飞锁：撤单/改价（cancel+sell 两步）全程只允许一个流程，连点防重复撤挂
+  onOrderModify._busy = true;
+  try {
+    const body = el('div');
+    // 当前挂单价（改价参考）—— it.price 与挂单卡片同源（挂单价 = 净收入 × 1.05）
+    const cur = (it.price != null && it.price !== '') ? Number(it.price) : NaN;
+    if (Number.isFinite(cur)) {
+      const priceLine = el('div', { cls: 'modal-price-line' });
+      append(priceLine,
+        el('span', { cls: 'modal-price-label', text: t('order.currentPrice') }),
+        el('b', { cls: 'modal-price', text: fmtNum(cur) }),
+        el('span', { cls: 'modal-price-unit', text: t('common.magic') })
+      );
+      body.appendChild(priceLine);
+    }
+    append(body, el('div', { cls: 'modal-note', text: t('order.modifyChoiceHint') }));
+    const choice = await choiceDialog({
+      hero: buildModalHero(it), body: body,
+      option1Text: t('order.cancelOrder'), option1Variant: 'sell',
+      option2Text: t('order.modifyPrice'), option2Variant: 'primary',
+    });
+    if (choice === '1') {
+      const r = await send({ type: 'CANCEL_ORDER', orderId: it.id });
+      showToast(r && r.ok ? t('order.cancelSuccess') : t('order.cancelFailed'), r && r.ok ? 'success' : 'error');
+    } else if (choice === '2') {
+      const netPrice = await promptSellPrice(it);
+      if (netPrice == null) return;
+      const cr = await send({ type: 'CANCEL_ORDER', orderId: it.id });
+      if (!cr || !cr.ok) { showToast(t('order.cancelFailed'), 'error'); return; }
+      const sr = await send({ type: 'SELL_CARD', cardId: it.cardId, isMech: isMechCard(it), netPrice: netPrice });
+      if (sr && sr.ok) { await send({ type: 'LOAD_ORDERS' }); showToast(t('order.modifySuccess'), 'success'); }
+      else showToast(t('order.modifyFailed'), 'error');
+    }
+  } finally { onOrderModify._busy = false; }
 }
 
 // 一键购买：二次确认 → 后台开详情页核对价格并成交
 async function onBuy(it) {
-  const price = it.lowestAsk;
-  // 无卖单防御（lowestAsk=null 或负值）；0 放行（可能有 0 价挂单）
-  if (price == null || Number(price) < 0) { showToast(t('err.noAsk'), 'error'); return; }
-  const name = cardName(it);
-  // 预算魔力池拦截：未设/不足则直接提示，不进入二次确认（与 background buyCard 同口径）
-  const u = computeUsable(state);
-  if (u.bTotal <= 0) { showToast(t('err.buyBudgetNotSet'), 'error'); return; }
-  if (Number(price) > u.usable) {
-    const reason = u.bonus < u.remaining ? t('err.balanceInsufficient') : t('err.budgetRemainingInsufficient');
-    showToast(reason + t('err.buyBudgetInsufficientToast', { price: price, usable: u.usable }), 'error');
-    return;
-  }
-  const body = el('div');
-  // 价格展示（lowestAsk）
-  const priceLine = el('div', { cls: 'modal-price-line' });
-  append(priceLine,
-    el('b', { cls: 'modal-price', text: fmtNum(price) }),
-    el('span', { cls: 'modal-price-unit', text: t('common.magic') })
-  );
-  append(body,
-    priceLine,
-    el('div', { cls: 'modal-note', text: t('trade.buyConfirmNote', { price: price }) })
-  );
-  const ok = await confirmDialog({
-    hero: buildModalHero(it),
-    body,
-    confirmText: t('common.buy'),
-    cancelText: t('common.cancel'),
-    confirmVariant: 'buy',
-  });
-  if (!ok) return;
-  // 购买走 background buy 直连（buy 限价 + 可能 cancel 撤挂单），结果回这里展示
-  const loading = showToast(t('trade.buyingToast', { name: name }), 'info', 0);
-  let resp;
+  if (onBuy._busy) return;   // 单飞锁：确认弹窗+购买全程只允许一个流程（连点/多卡并发 = 双买风险）
+  onBuy._busy = true;
   try {
-    const _rar = (it.rarity || (it.variant || {}).rarity || '');
-    const _monLimit = Number(((state.config && state.config.maxPriceByRarity) || {})[_rar]) || 0;
-    resp = await send({ type: 'BUY_CARD', variant: it.variant, expectPrice: Number(price), filmName: name, poster: it.poster || '', rarity: _rar, title: (it.title || ''), maxPrice: _monLimit });
-  } catch (e) {
-    resp = { ok: false, reason: 'error' };
-  }
-  dismissToast(loading);
-  if (resp && resp.ok && resp.confirmed) {
-    showToast(t('trade.buySuccessToast', { name: name, price: resp.price }), 'success');
-  } else if (resp && resp.ok && !resp.confirmed) {
-    showToast(t('trade.buyUnconfirmedToast', { name: name }), 'info');
-  } else {
-    const reason = (resp && resp.reason) || 'error';
-    const text = t(BUY_FAIL_REASON[reason] || 'err.unknownReason');
-    // cancel 撤单也失败（残留挂单）：toast 附 detail url 提示用户到站点手动撤销
-    const extra = (resp && resp.cancelFailed && resp.url)
-      ? t('err.cancelFailedExtra', { url: resp.url }) : '';
-    showToast(t('trade.buyFailedToast', { text: text + extra }), 'error');
-  }
+    const price = it.lowestAsk;
+    // 无卖单防御（lowestAsk=null 或负值）；0 放行（可能有 0 价挂单）
+    if (price == null || Number(price) < 0) { showToast(t('err.noAsk'), 'error'); return; }
+    const name = cardName(it);
+    // 预算魔力池拦截：未设/不足则直接提示，不进入二次确认（与 background buyCard 同口径）
+    const u = computeUsable(state);
+    if (u.bTotal <= 0) { showToast(t('err.buyBudgetNotSet'), 'error'); return; }
+    if (Number(price) > u.usable) {
+      const reason = u.bonus < u.remaining ? t('err.balanceInsufficient') : t('err.budgetRemainingInsufficient');
+      showToast(reason + t('err.buyBudgetInsufficientToast', { price: price, usable: u.usable }), 'error');
+      return;
+    }
+    const body = el('div');
+    // 价格展示（lowestAsk）
+    const priceLine = el('div', { cls: 'modal-price-line' });
+    append(priceLine,
+      el('b', { cls: 'modal-price', text: fmtNum(price) }),
+      el('span', { cls: 'modal-price-unit', text: t('common.magic') })
+    );
+    append(body,
+      priceLine,
+      el('div', { cls: 'modal-note', text: t('trade.buyConfirmNote', { price: price }) })
+    );
+    const ok = await confirmDialog({
+      hero: buildModalHero(it),
+      body,
+      confirmText: t('common.buy'),
+      cancelText: t('common.cancel'),
+      confirmVariant: 'buy',
+    });
+    if (!ok) return;
+    // 购买走 background buy 直连（buy 限价 + 可能 cancel 撤挂单），结果回这里展示
+    const loading = showToast(t('trade.buyingToast', { name: name }), 'info', 0);
+    let resp;
+    try {
+      const _rar = (it.rarity || (it.variant || {}).rarity || '');
+      const _monLimit = Number(((state.config && state.config.maxPriceByRarity) || {})[_rar]) || 0;
+      resp = await send({ type: 'BUY_CARD', variant: it.variant, expectPrice: Number(price), filmName: name, poster: it.poster || '', rarity: _rar, title: (it.title || ''), maxPrice: _monLimit });
+    } catch (e) {
+      resp = { ok: false, reason: 'error' };
+    }
+    dismissToast(loading);
+    if (resp && resp.ok && resp.confirmed) {
+      showToast(t('trade.buySuccessToast', { name: name, price: resp.price }), 'success');
+    } else if (resp && resp.ok && !resp.confirmed) {
+      showToast(t('trade.buyUnconfirmedToast', { name: name }), 'info');
+    } else {
+      const reason = (resp && resp.reason) || 'error';
+      const text = t(BUY_FAIL_REASON[reason] || 'err.unknownReason');
+      // cancel 撤单也失败（残留挂单）：toast 附 detail url 提示用户到站点手动撤销
+      const extra = (resp && resp.cancelFailed && resp.url)
+        ? t('err.cancelFailedExtra', { url: resp.url }) : '';
+      showToast(t('trade.buyFailedToast', { text: text + extra }), 'error');
+    }
+  } finally { onBuy._busy = false; }
 }
 
 // ---------- 事件 ----------
@@ -4787,7 +4829,7 @@ async function onPageSizePick(value) {
   await send({ type: 'SET_CONFIG', config: cfg });
   state = await send({ type: 'GET_STATE' });
   renderLive();
-  if (state.mtApiKey) { if (hasSearchTags()) runSearch(); else send({ type: 'REFRESH_NOW' }); }   // 改 pageSize 后立即刷新市场（有 tag → 重 search）
+  triggerMarketRefresh();   // 改 pageSize 后刷新市场（统一入口：节流 + spin）
 }
 
 async function onModePick(value) {
@@ -5352,7 +5394,7 @@ function initTokenModal() {
       apiKeyInvalidShown = false;  // 新 key 已保存，重置失效弹窗 guard，下次失效可再弹
       state = await send({ type: 'GET_STATE' });
       renderAll();
-      send({ type: 'REFRESH_NOW' });   // 验证后立即触发市场采集（refreshAll 的 ensure 前置慢、市场 startRound 排最后；先采一轮让市场尽快出卡）
+      triggerMarketRefresh(true);   // 验证后立即触发市场采集（force 绕节流；refreshAll 的 ensure 前置慢、市场 startRound 排最后，先采一轮让市场尽快出卡）
     } else {
       var msgEl = $('tokenModalMsg');
       if (msgEl) { msgEl.textContent = (r && r.reason === 'invalid') ? t('token.errInvalid') : t('token.errVerify'); msgEl.className = 'token-msg err'; }
@@ -5388,8 +5430,8 @@ function applyLabUrl() {
   initTokenPanel();
   if (!state.mtApiKey) document.body.classList.add('no-token');
   initTokenModal();
-  // 加载时刷新市场：有定向 tag → runSearch；否则 → triggerRefreshRound（用 cfg.listPageSize）
-  if (state.mtApiKey) { if (hasSearchTags()) runSearch(); else send({ type: 'REFRESH_NOW' }); }
+  // 加载时刷新市场（统一入口：节流 + spin）
+  triggerMarketRefresh();
 })();
 
 // 交易记录搜索框事件绑定（仅初始化一次）

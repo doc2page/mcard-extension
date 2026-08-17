@@ -212,33 +212,37 @@ async function startRound(st, reason, onlyRarities, pageSize) {
   console.log('[MTEAM] start round', rarities.join(','));
 
   let hits = 0, misses = 0, authFailed = false;
-  for (const rarity of rarities) {
-    await set({ round: Object.assign({}, round, { currentRarity: rarity }) });
-    try {
-      const resp = await fetchMarketList(rarity, pageSize);
-      if (resp && resp.code === '0' && resp.data && Array.isArray(resp.data.data)) {
-        await applyMarketRarity(rarity, resp.data.data, Date.now());
-        hits++;
-        console.log('[MTEAM] market data received', rarity, resp.data.data.length);
-      } else {
+  try {
+    for (const rarity of rarities) {
+      await set({ round: Object.assign({}, round, { currentRarity: rarity }) });
+      try {
+        const resp = await fetchMarketList(rarity, pageSize);
+        if (resp && resp.code === '0' && resp.data && Array.isArray(resp.data.data)) {
+          await applyMarketRarity(rarity, resp.data.data, Date.now());
+          hits++;
+          console.log('[MTEAM] market data received', rarity, resp.data.data.length);
+        } else {
+          misses++;
+          console.warn('[MTEAM] market empty/invalid', rarity);
+        }
+      } catch (e) {
         misses++;
-        console.warn('[MTEAM] market empty/invalid', rarity);
+        console.warn('[MTEAM] market fetch failed', rarity, e);
+        if (e && e.message === 'API_KEY_INVALID') { authFailed = true; break; }  // 令牌失效，终止本轮
       }
-    } catch (e) {
-      misses++;
-      console.warn('[MTEAM] market fetch failed', rarity, e);
-      if (e && e.message === 'API_KEY_INVALID') { authFailed = true; break; }  // 令牌失效，终止本轮
+      await randSleep(400, 900);  // 人类化节奏
     }
-    await randSleep(400, 900);  // 人类化节奏
-  }
 
-  // 每轮顺带刷新 profile + bonus（魔力值/明细）；令牌失效时跳过（mtFetch 已抛 API_KEY_INVALID）
-  if (!authFailed) {
-    try { await fetchProfile(); } catch (e) { console.warn('[MTEAM] profile fetch failed', e); }
-    try { await fetchMyBonus(); } catch (e) { console.warn('[MTEAM] bonus fetch failed', e); }
+    // 每轮顺带刷新 profile + bonus（魔力值/明细）；令牌失效时跳过（mtFetch 已抛 API_KEY_INVALID）
+    if (!authFailed) {
+      try { await fetchProfile(); } catch (e) { console.warn('[MTEAM] profile fetch failed', e); }
+      try { await fetchMyBonus(); } catch (e) { console.warn('[MTEAM] bonus fetch failed', e); }
+    }
+  } finally {
+    // 兜底解锁：循环中途若抛错（set/randSleep 等位于内层 try 之外，一旦崩则 onRoundDone 永不执行、
+    // isRoundRunning 永久卡 true，重启前市场采集再也触发不了——Docker 曾因崩溃锁卡过），finally 确保仍解锁
+    await onRoundDone({ hits, misses, authFailed }, null);
   }
-
-  await onRoundDone({ hits, misses, authFailed }, null);
 }
 
 // manual 市场刷新冷却：防快速切视图/反复点返回市场触发密集采集（风控）。与 MYORDERS_FETCH_COOLDOWN

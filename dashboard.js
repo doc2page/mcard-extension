@@ -630,12 +630,16 @@ function renderCards() {
   }
 
   const viewMode = (state.config && state.config.viewMode) || 'price';
+  // 自挂单集合（防自买）：存活卖单 key=filmId|rarity|provenance|price。市场卡同款同价 = 用户自己的挂单
+  // （最低价就是自己在卖）→ 购买按钮灰显 + 批量禁选（Docker v1.0.1 补：原只灰显单卡漏了批量）
+  const myAsks = new Set((((state && state.ordersAll) || []).filter((o) => o.status === 'open' && o.side === 'sell'))
+    .map((o) => [o.filmId, o.rarity, o.provenance, Number(o.price)].join('|')));
   if (viewMode === 'price') {
     // 按价格升序，不分稀有度
     const sorted = shown.slice().sort((a, b) =>
       (a.lowestAsk == null ? Infinity : Number(a.lowestAsk)) - (b.lowestAsk == null ? Infinity : Number(b.lowestAsk)));
     const list = sorted.slice(0, 300);
-    list.forEach((it, i) => grid.appendChild(buildCard(it, Math.min(i, 40) * 30)));
+    list.forEach((it, i) => grid.appendChild(buildCard(it, Math.min(i, 40) * 30, myAsks)));
     if (sorted.length > list.length) {
       grid.appendChild(el('div', { cls: 'group-more', text: t('card.priceTruncate', { shown: list.length, total: sorted.length }) }));
     }
@@ -661,7 +665,7 @@ function renderCards() {
       list.sort((a, b) => (a.lowestAsk == null ? Infinity : Number(a.lowestAsk)) - (b.lowestAsk == null ? Infinity : Number(b.lowestAsk)));
       grid.appendChild(groupHeader(r, list.length));
       const slice = list.slice(0, 100);
-      slice.forEach((it) => { grid.appendChild(buildCard(it, Math.min(cardIndex, 40) * 30)); cardIndex++; });
+      slice.forEach((it) => { grid.appendChild(buildCard(it, Math.min(cardIndex, 40) * 30, myAsks)); cardIndex++; });
       if (list.length > slice.length) {
         grid.appendChild(el('div', { cls: 'group-more', text: t('card.groupTruncate', { n: (list.length - slice.length) }) }));
       }
@@ -679,7 +683,7 @@ function groupHeader(r, count) {
   return h;
 }
 
-function buildCard(it, delay) {
+function buildCard(it, delay, myAsks) {
   const isMech = isMechCard(it);
   const rarity = (it.variant && it.variant.rarity) || '';
   const url = buildDetailUrl(it, (state.config && state.config.webBase) || 'kp.m-team.cc');
@@ -730,7 +734,14 @@ function buildCard(it, delay) {
   if (price != null) append(priceEl, document.createTextNode(fmtPrice(price)), el('span', { cls: 'unit', text: t('common.magic') }));
   else priceEl.appendChild(el('span', { cls: 'unit', text: '—' }));
   const buyBtn = el('button', { cls: 'ca-btn buy', attrs: { title: t('card.buyBtnTitle') }, text: t('card.buyBtn') });
-  buyBtn.onclick = (e) => { e.stopPropagation(); onBuy(it); };
+  // 同款（filmId+rarity+provenance）同价 = 用户自己的挂单（最低价就是自己在卖）→ 灰显，避免自买
+  if (myAsks && price != null && it.variant && myAsks.has([it.variant.filmId, rarity, it.variant.provenance, price].join('|'))) {
+    buyBtn.disabled = true;
+    buyBtn.classList.add('own-listing');
+    buyBtn.title = t('card.ownListing');
+    card.dataset.ownListing = '1';   // 标记自挂单：批量选择据此禁选（onBatchCardClick 拦截 + 隐藏勾选框）
+  }
+  buyBtn.onclick = (e) => { e.stopPropagation(); if (!buyBtn.disabled) onBuy(it); };
   append(priceRow, priceEl, buyBtn);
   body.appendChild(priceRow);
 
@@ -3410,6 +3421,11 @@ function batchIdOf(card) {
 
 // 点卡片 toggle 选中；view 由 card builder 传入。第一次点击进入选择态。
 function onBatchCardClick(card, cardEl, view) {
+  // 自挂单禁选（防自买的批量侧）：市场卡是自己的挂单 → toast + return（单卡侧只灰显按钮，批量曾漏选致自买，Docker v1.0.1 修）
+  if (view === 'market' && cardEl && cardEl.dataset.ownListing) {
+    showToast(t('card.ownListing'));
+    return;
+  }
   if (batchInView && batchInView !== view) batchSelected = new Set();  // 跨 view 不混选
   batchInView = view;
   var id = batchIdOf(card);

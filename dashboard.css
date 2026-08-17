@@ -1709,6 +1709,9 @@ body.no-token .layout > main { display: none !important; }
 /* tab 条（按钮复用 .seg-btn.md-tab） */
 .md-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
 .md-tabs .md-tab { flex: 0 0 auto; }
+/* 生成分析报告按钮（绿色动作按钮，非 tab；推到行尾） */
+.md-tab.md-report { margin-left: auto; background: #43a047; color: #fff; border-color: #43a047; }
+.md-tab.md-report:hover { background: #388e3c; border-color: #388e3c; color: #fff; }
 
 /* 视图容器 */
 .md-trade-view { display: flex; flex-direction: column; gap: 12px; }

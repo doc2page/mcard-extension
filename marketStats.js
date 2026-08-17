@@ -3,6 +3,8 @@
  * 自包含：不依赖 chrome.* 或其他全局，可被 node --test 单测。
  * background.js（importScripts）+ dashboard.html（<script>）双端引入：
  *   background 落盘无筛选 summary；dashboard 本地实时重算筛选态。
+ * 与 mcard(Docker) public/marketStats.js 同源，同步自 v1.2.x：
+ *   _priceHistogram 桶边界 lo/hi、机制卡稀有度筛选排除、analyzeMarket 报告判读引擎已对齐。
  */
 // 'YYYY-MM-DD HH:MM:SS' → ms（本地时区）
 function _mkMs(s) {
@@ -183,7 +185,9 @@ function _priceHistogram(prices) {
   const lo = Math.floor(Math.log10(prices[0] || 1));
   const hi = Math.ceil(Math.log10(prices[prices.length - 1] || 1));
   const buckets = 6, span = Math.max(1, (hi - lo) || 1), step = span / buckets;
-  const out = Array.from({ length: buckets }, function () { return { count: 0, volume: 0 }; });
+  const out = Array.from({ length: buckets }, function (_, i) {
+    return { count: 0, volume: 0, lo: Math.round(Math.pow(10, lo + i * step)), hi: Math.round(Math.pow(10, lo + (i + 1) * step)) };
+  });
   for (let i = 0; i < prices.length; i++) {
     const p = prices[i];
     if (!(p > 0)) continue; // 防御：跳过非正价格（log10(p≤0)=NaN→bi=NaN→out[NaN] 崩溃）
@@ -401,7 +405,10 @@ function _relations(subset) {
 function computeMarketSummary(trades, filter, today) {
   const all = Array.isArray(trades) ? trades : [];
   const subset = filter ? all.filter(function (tr) {
-    if (filter.rarities && filter.rarities.size && !filter.rarities.has(tr.rarity)) return false;
+    if (filter.rarities && filter.rarities.size) {
+      if (tr.provenance === 'mech') return false;   // 机制卡有稀有度但归「来源」筛选管，不参与稀有度筛选（对齐 _cardRanks 稀有度矩阵口径）
+      if (!filter.rarities.has(tr.rarity)) return false;
+    }
     if (filter.provenances && filter.provenances.size && !filter.provenances.has(tr.provenance)) return false;
     if (filter.titles && filter.titles.size && !filter.titles.has(tr.title)) return false;
     const ds = _dateStr(_mkMs(tr.tradedAt));
@@ -462,7 +469,10 @@ function filterTrades(hist, filter, search, dir) {
   var uid = (search && /^\d+$/.test(search)) ? search : null;
   return hist.filter(function (r) {
     if (filter) {
-      if (filter.rarities && filter.rarities.size && !filter.rarities.has(r.rarity)) return false;
+      if (filter.rarities && filter.rarities.size) {
+        if (r.provenance === 'mech') return false;   // 机制卡归「来源」筛选管，不参与稀有度筛选（与 computeMarketSummary 一致）
+        if (!filter.rarities.has(r.rarity)) return false;
+      }
       if (filter.provenances && filter.provenances.size && !filter.provenances.has(r.provenance)) return false;
       if (filter.titles && filter.titles.size && !filter.titles.has(r.title)) return false;
       if (filter.dateFrom || filter.dateTo) {
@@ -483,6 +493,96 @@ function filterTrades(hist, filter, search, dir) {
   });
 }
 
+// ============ 市场报告判读引擎 ============
+// 把 computeMarketSummary 的全量聚合结果 → 4 洞察判读 + 顶端摘要。阈值集中常量，便于按体感调整。
+const MR_THRESH = { trend: 0.15, flow: 1.2, skew: 1.3, cv: [0.5, 1.0], hhi: [1000, 1800], both: [0.2, 0.4], ladder: 1.5 };
+const MR_RARITY_ORDER = ['N', 'R', 'SR', 'SSR', 'UR'];
+function analyzeMarket(sum) {
+  sum = sum || {};
+  // 总历时天数（rangeStart~rangeEnd）
+  let days = 0;
+  if (sum.rangeStart && sum.rangeEnd) {
+    const dms = _mkMs(sum.rangeEnd) - _mkMs(sum.rangeStart);
+    if (Number.isFinite(dms) && dms >= 0) days = Math.floor(dms / 86400000) + 1;
+  }
+  const dailyAvg = days ? sum.totalTrades / days : 0;
+
+  // —— ① 量价诊断（四象限）—— tier: expand/sell/divergence/cool/flat/nodata（语言无关 key，报告端翻译）
+  const tr = sum.trend;
+  let priceAction;
+  if (!tr) {
+    priceAction = { tier: 'nodata', dailyAvg: dailyAvg };
+  } else {
+    const td = tr.tradeDeltaPct || 0, pd = tr.priceDeltaPct || 0;
+    const up = (x) => x > MR_THRESH.trend, down = (x) => x < -MR_THRESH.trend;
+    let tier;
+    if (up(td) && up(pd)) tier = 'expand';
+    else if (up(td) && down(pd)) tier = 'sell';
+    else if (down(td) && up(pd)) tier = 'divergence';
+    else if (down(td) && down(pd)) tier = 'cool';
+    else tier = 'flat';
+    priceAction = { tier: tier, dailyAvg: dailyAvg, tradeDelta: td, priceDelta: pd };
+  }
+
+  // —— ② 主导结构（GMV 占比 + 集中度）—— hhiTier: dispersed/moderate/oligopoly
+  const rm = sum.rarityMatrix || [];
+  let totVol = 0;
+  for (let i = 0; i < rm.length; i++) totVol += (rm[i].volume || 0);
+  const safe = totVol || 1;
+  const sorted = rm.slice().sort((a, b) => (b.volume || 0) - (a.volume || 0));
+  const hhi = (sum.concentration && sum.concentration.hhi) || 0;
+  const structure = {
+    main: sorted[0] ? { rarity: sorted[0].rarity, pct: sorted[0].volume / safe } : null,
+    second: sorted[1] ? { rarity: sorted[1].rarity, pct: sorted[1].volume / safe } : null,
+    matrix: rm,
+    hhi: hhi,
+    hhiTier: hhi < MR_THRESH.hhi[0] ? 'dispersed' : hhi < MR_THRESH.hhi[1] ? 'moderate' : 'oligopoly',
+    top10Pct: (sum.concentration && sum.concentration.top10Pct) || 0,
+  };
+
+  // —— ③ 流动性成色（资金流向 + 投机 + 倒卖）—— flow: inflow/outflow/balanced; bothTier: heavy/moderate/collector
+  const ov = sum.overlap || {};
+  const pb = ov.pureBuyerPct || 0, ps = ov.pureSellerPct || 0, bt = ov.bothPct || 0;
+  const flips = sum.flips || [];
+  let flipSum = 0;
+  for (let j = 0; j < flips.length; j++) flipSum += (flips[j].flips || 0);
+  // 倒卖毛利/持有用中位数（抗极端：偶发低价买高价转的 10x 会把均值拉飞）
+  const medOf = function (arr) { const n = arr.length; if (!n) return null; return n % 2 ? arr[(n - 1) / 2] : (arr[n / 2 - 1] + arr[n / 2]) / 2; };
+  const margins = flips.map((f) => f.avgMargin || 0).filter((x) => x).sort((a, b) => a - b);
+  const holds = flips.map((f) => f.avgHoldDays || 0).filter((x) => Number.isFinite(x)).sort((a, b) => a - b);
+  const liquidity = {
+    flow: pb > ps * MR_THRESH.flow ? 'inflow' : ps > pb * MR_THRESH.flow ? 'outflow' : 'balanced',
+    pureBuyerPct: pb, pureSellerPct: ps, bothPct: bt,
+    bothTier: bt > MR_THRESH.both[1] ? 'heavy' : bt > MR_THRESH.both[0] ? 'moderate' : 'collector',
+    flipCount: flipSum,
+    avgMargin: medOf(margins),
+    avgHoldDays: medOf(holds),
+  };
+
+  // —— ④ 定价合理性（偏态 + 阶梯 + 离散）—— skewTier: skewed/symmetric; cvTier: consensus/normal/divergent
+  const med = sum.medianPrice || 0, avg = sum.avgPrice || 0;
+  const skew = med ? avg / med : 1;
+  const cv = avg ? (sum.priceStd || 0) / avg : 0;
+  const byR = {}; for (let r = 0; r < rm.length; r++) byR[rm[r].rarity] = rm[r].avgPrice || 0;
+  let ladderOk = true;
+  const ladderGaps = [];
+  for (let li = 1; li < MR_RARITY_ORDER.length; li++) {
+    const lo = byR[MR_RARITY_ORDER[li - 1]], hi = byR[MR_RARITY_ORDER[li]];
+    const gap = lo > 0 ? hi / lo : 0;
+    ladderGaps.push({ from: MR_RARITY_ORDER[li - 1], to: MR_RARITY_ORDER[li], gap: gap });
+    if (lo > 0 && hi / lo < MR_THRESH.ladder) ladderOk = false;
+  }
+  const valuation = {
+    median: med, avg: avg, skew: skew,
+    skewTier: skew > MR_THRESH.skew ? 'skewed' : 'symmetric',
+    p25: sum.priceP25 || 0, p75: sum.priceP75 || 0, p90: sum.priceP90 || 0,
+    cv: cv, cvTier: cv < MR_THRESH.cv[0] ? 'consensus' : cv < MR_THRESH.cv[1] ? 'normal' : 'divergent',
+    ladderOk: ladderOk, ladderGaps: ladderGaps,
+  };
+
+  return { days: days, dailyAvg: dailyAvg, priceAction: priceAction, structure: structure, liquidity: liquidity, valuation: valuation };
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { computeMarketSummary: computeMarketSummary, extractFacets: extractFacets, tradeDirection: tradeDirection, filterTrades: filterTrades };
+  module.exports = { computeMarketSummary: computeMarketSummary, analyzeMarket: analyzeMarket, extractFacets: extractFacets, tradeDirection: tradeDirection, filterTrades: filterTrades };
 }

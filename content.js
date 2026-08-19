@@ -42,6 +42,12 @@
 
   function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
+  // 掉卡活动起点（北京时间 2026-07-01 00:00 正式开始掉卡）。createdDate 是 M-TEAM 北京时间串，
+  // 字符串比较天然按时间序。翻页（从新到旧）一旦最早消息早于该点 = 已覆盖活动全程 → 掉落数据完整，
+  // 不必翻到最后一页（部分用户系统消息量大，全翻浪费；与 dropStats.js 的 DROP_SINCE_DEFAULT 同源事实）。
+  // 阈值取 UTC 2026-06-30 12:00 = 北京 2026-06-30 20:00，留 4h 安全余量。
+  const DROP_ORIGIN = '2026-06-30 20:00:00';
+
   // ---------- 掉落消息采集：模拟点击"下一页"翻页，inject 被动 hook 每页 ----------
   // 仅在采集 tab（URL 带 ?mtm_drop=1）工作。
   // 站点不允许 content 直接调 /api/msg/search 翻页，改模拟点击 ant 分页器：
@@ -80,6 +86,10 @@
 
       while (page < totalPages) {
         const earliest = earliestCreatedDate(all);
+        // 完整性判定：最早消息已早于掉卡活动起点 → 活动期消息必然全部收齐，标完整并停（免翻余下页）
+        if (earliest && earliest <= DROP_ORIGIN) { complete = true; break; }
+        // 增量衔接：最早消息已早于本地库最新（lastMsgDate）→ 与已有数据衔接即停；不标完整
+        // （本地库自身是否覆盖活动全程未确认，msgTotal 交由全量翻页/手动导入维护）
         if (earliest && stopDate && earliest <= stopDate) { complete = false; break; }
         // 点击"下一页"；按钮禁用/消失则停
         if (!await clickNextPage()) { console.log('[MTEAM] drop: next btn unavailable, stop'); complete = false; break; }

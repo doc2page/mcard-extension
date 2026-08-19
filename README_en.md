@@ -6,7 +6,7 @@
 
 **M-Team Card Market Manual Tool** · Chrome MV3 Extension
 
-[![version](https://img.shields.io/github/v/release/jaxo4life/mtcard?label=version)](https://github.com/jaxo4life/mtcard/releases)
+[![version](https://img.shields.io/github/v/release/doc2page/mcard-extension?label=version)](https://github.com/doc2page/mcard-extension/releases)
 [![Chrome](https://img.shields.io/badge/Chrome-111%2B-4285F4?logo=googlechrome&logoColor=white)](https://developer.chrome.com/docs/extensions/mv3/intro/)
 [![Manifest](https://img.shields.io/badge/Manifest-V3-34A853)](https://developer.chrome.com/docs/extensions/mv3/intro/)
 
@@ -29,7 +29,7 @@
   <br><sub>Drop stats (daily bar chart + rarity / title distribution)</sub>
 </p>
 
-> Repo: https://github.com/jaxo4life/mtcard
+> Repo: https://github.com/doc2page/mcard-extension
 
 Talks directly to the [M-Team card market](https://kp.m-team.cc/cards/market) API to collect market cards, mech cards, trade history, open orders, holdings, profile and Bonus details — **all triggered manually by you** (click refresh / switch views / buy·sell·cancel), with no background polling, no timer, no push channel. Supports **manual buy/sell/cancel** (limit-order semantics + bonus budget cap + own-listing guard), **directed search** (query listings by full film title), **trade history / open orders / holdings** management, **drop probability stats** (dual-source collection: feed incremental + background-tab full backfill, with manual JSON import to backfill history), **card binder** (holdings + listings aggregated by film into a rarity/title matrix), **player portrait** (wealth tier / spending trend / 5-dim radar synthesized from balance · income · trades · drops · voucher gambling), **market data** (full-site trade-history aggregation + one-click market analysis report), bilingual UI and dark/light themes.
 

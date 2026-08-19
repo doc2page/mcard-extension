@@ -6,7 +6,7 @@
 
 **M-Team 卡牌市场手动工具** · Chrome MV3 扩展
 
-[![version](https://img.shields.io/github/v/release/jaxo4life/mtcard?label=version)](https://github.com/jaxo4life/mtcard/releases)
+[![version](https://img.shields.io/github/v/release/doc2page/mcard-extension?label=version)](https://github.com/doc2page/mcard-extension/releases)
 [![Chrome](https://img.shields.io/badge/Chrome-111%2B-4285F4?logo=googlechrome&logoColor=white)](https://developer.chrome.com/docs/extensions/mv3/intro/)
 [![Manifest](https://img.shields.io/badge/Manifest-V3-34A853)](https://developer.chrome.com/docs/extensions/mv3/intro/)
 
@@ -29,7 +29,7 @@
   <br><sub>掉落统计（每日柱状图 + 稀有度 / 称号分布）</sub>
 </p>
 
-> 仓库：https://github.com/jaxo4life/mtcard
+> 仓库：https://github.com/doc2page/mcard-extension
 
 直连 [M-Team 卡牌市场](https://kp.m-team.cc/cards/market) API 接口采集市场卡片、机制卡、交易记录、当前挂单、持有卡片、个人资料与魔力（Bonus）明细——**全部由你手动触发**（点刷新 / 切视图 / 买·卖·撤），无后台轮询、无定时器、无推送通道。支持**手动买/卖/撤**（限价单语义 + 魔力预算池控额 + 自挂单防自买）、**定向搜索**（按完整片名查在售挂单）、**交易记录 / 当前挂单 / 持有卡片**管理、**掉落概率统计**（feed 增量 + tab 全量双源采集，支持手动导入补全历史）、**我的卡册**（持有+挂单按影片聚合稀有度/称号矩阵）、**用户画像**（综合余额·产能·交易·掉落·符券博弈，刻财富等级/消费趋势/五维雷达）、**市场数据**（全站成交历史聚合 + 一键生成市场分析报告）、中英双语界面与深浅色主题。
 

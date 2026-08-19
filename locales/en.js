@@ -273,6 +273,8 @@ registerMessages('en', {
   'common.unitPerDay': '/day',
   'inv.locked': 'Cooling',
   'inv.tradable': 'Tradable',
+  'inv.showLocked': 'Show Locked',
+  'inv.showLockedHint': 'Manually locked cards are hidden by default; check to show',
   'inv.ask': 'Ask',
   'inv.sell': 'Sell',
   'inv.sellPlaceholder': 'Net price (Bonus you will get)',
@@ -376,8 +378,7 @@ registerMessages('en', {
   'dropStats.rangeN': '{n}d',
   'dropStats.rangeAll': 'All',
   // Manual drop import (paste message search response JSON to backfill full history before feed)
-  'dropStats.feedNote': 'The official API currently returns only the latest 25 drop records',
-  'dropStats.importHint': 'Drop data incomplete — you can backfill it manually:',
+  'dropStats.importHint': 'Only {n} records fetched so far — drop data incomplete, you can backfill it manually:',
   'dropStats.importBtn': 'Import Drop Records',
   'dropStats.importTitle': 'Import Drop Records',
   'dropStats.importDo': 'Import',

@@ -36,7 +36,7 @@ const DEFAULT_STATE = {
     rarities: RARITIES,
     listPageSize: 10,        // 市场列表每页条数（手动刷新用；默认 10）
     maxPriceByRarity: { UR: 0, SSR: 0, SR: 0, R: 0, N: 0 }, // 各稀有度最高 lowestAsk，0 = 不限
-    mechTypes: [],          // 勾选的机制卡子类型(type)，默认全关
+    mechTypes: MECH_TYPES.map((m) => m.type),  // 勾选的机制卡子类型(type)，默认全选（初始安装即全量刷新采集，与稀有度默认全选一致）
     maxPriceByMech: { mana_voucher: 0, single_free: 0, vip_7d: 0 }, // 各机制卡子类型阈值，0 = 不限
     presets: [],            // 保存的阈值方案 [{ name, rarities, values, mechTypes, mechValues }]
     viewMode: 'price',      // 卡片显示模式：'group'(按分类) | 'price'(按价格升序，默认)
@@ -75,6 +75,10 @@ const DEFAULT_STATE = {
 // ============ 存储 helpers ============
 const getAll = () => chrome.storage.local.get(null);
 const set = (obj) => chrome.storage.local.set(obj);
+
+// SW 启动兜底：幂等补默认键（onInstalled/onStartup 只在安装/浏览器重启触发；SW 被消息唤醒时
+// storage 可能仍缺 DEFAULT_STATE 键——删除重装等时序下首次消息先于补键到达，读 undefined 崩）
+ensureDefaults().catch((e) => console.warn('[MTEAM] ensureDefaults on boot failed', e));
 
 // SW 启动：dropStats.summary 用最新 computeDropSummary 重算（dropStats.js 改动后自动生效，无需重采）
 getAll().then((st) => {
@@ -346,9 +350,12 @@ async function onRoundDone(msg, sender) {
   const misses = Number(msg.misses) || 0;
   console.log('[MTEAM] round done', 'hits', hits, 'misses', misses, 'authFailed', authFailed);
 
-  const stats = Object.assign({}, st.stats, {
-    total: (st.stats.total || 0) + 1,
-    misses: (st.stats.misses || 0) + misses,
+  // stats 键防御：极端时序下（删除重装后 storage 尚未补键、或历史数据缺键）st.stats 可能 undefined，
+  // 兜底 DEFAULT_STATE.stats 再合并，避免 `st.stats.total` 读 undefined 崩掉整个 onRoundDone（锁卡风险）
+  const prevStats = st.stats || DEFAULT_STATE.stats;
+  const stats = Object.assign({}, prevStats, {
+    total: (prevStats.total || 0) + 1,
+    misses: (prevStats.misses || 0) + misses,
     lastRoundTime: Date.now(),
     lastError: authFailed ? 'api_key_invalid' : (misses > 0 ? 'partial_miss' : null),
   });
@@ -990,15 +997,18 @@ async function onDropFirst() {
 }
 
 // content 翻页完，合并所有页 messages（tab 全量）；tab 后清空 feedCards（msg 已含最新，feed 重新增量）
+// complete=true（翻到最后一页）时记录 msgTotal=全库条数——message 全量已完整在库，CTA 据此隐藏；
+// 中途断（未登录/翻页失败/增量衔接）不写，CTA 提示不完整可手动补全
 async function onDropDone(msg, sender) {
   if (msg && Array.isArray(msg.messages)) {
-    await mergeDropMessages(msg.messages);
+    await mergeDropMessages(msg.messages, !!msg.complete);
   }
   if (_dropResolve) { const r = _dropResolve; _dropResolve = null; r(); }   // 唤醒 ensureDropStats 关 tab
 }
 
 // 过滤「卡片掉落」+ 按 msgId 去重 + merge + 推进 lastMsgDate；tab 全量后清空 feedCards 重新累积
-async function mergeDropMessages(items) {
+// complete=true 表示翻到最后一页（全量完整）→ msgTotal = 合并后全库条数（CTA 完整性判断复用）
+async function mergeDropMessages(items, complete) {
   if (!Array.isArray(items) || !items.length) return 0;
   const st = await getAll();
   const ds = Object.assign({}, st.dropStats || {});
@@ -1031,6 +1041,9 @@ async function mergeDropMessages(items) {
     ds.lastMsgDate = latest || ds.lastMsgDate;
     ds.messages.sort((a, b) => (b.createdDate || '').localeCompare(a.createdDate || ''));
   }
+  // 翻到最后一页 = message 全量完整在库，记 msgTotal=全库条数（复用手动导入的 CTA 完整性判断，
+  // 翻全后 CTA 自动隐藏；中途断/未登录 tab 拿不到全量则不写，CTA 提示不完整）
+  if (complete) ds.msgTotal = ds.messages.length;
   ds.feedCards = [];   // tab 全量已含最新，清空 feed 增量（重新累积 msg 之后的新卡）
   ds.summary = computeDropSummary(ds.messages, ds.feedCards, ds.since, _todayStr());
   await set({ dropStats: ds });

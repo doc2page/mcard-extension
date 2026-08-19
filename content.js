@@ -75,26 +75,27 @@
       const totalPages = Number(resp.data.totalPages) || 1;
       let all = resp.data.data.slice();
       let page = Number(resp.data.pageNumber) || 1;
+      let complete = true;   // 是否翻到最后一页（完整全量）；中途断（stopDate 衔接/按钮没了/超时）= false
       dropSession = { waitingNext: null };
 
       while (page < totalPages) {
         const earliest = earliestCreatedDate(all);
-        if (earliest && stopDate && earliest <= stopDate) break;
+        if (earliest && stopDate && earliest <= stopDate) { complete = false; break; }
         // 点击"下一页"；按钮禁用/消失则停
-        if (!await clickNextPage()) { console.log('[MTEAM] drop: next btn unavailable, stop'); break; }
+        if (!await clickNextPage()) { console.log('[MTEAM] drop: next btn unavailable, stop'); complete = false; break; }
         // 等下一次 MSG_SEARCH（inject hook 点击触发的新页）；15s 超时停
         const next = await new Promise((res) => {
           dropSession.waitingNext = res;
           setTimeout(() => { if (dropSession.waitingNext === res) { dropSession.waitingNext = null; res(null); } }, 15000);
         });
-        if (!next || !next.batch || !next.batch.length) { console.log('[MTEAM] drop: no next data, stop'); break; }
+        if (!next || !next.batch || !next.batch.length) { console.log('[MTEAM] drop: no next data, stop'); complete = false; break; }
         all = all.concat(next.batch);
         page = next.page || (page + 1);
-        if (all.length > 5000) break;                            // 安全上限，防异常无限翻
+        if (all.length > 5000) { complete = false; break; }      // 安全上限，防异常无限翻
       }
 
       dropSession = null;
-      safeSend({ type: 'DROP_DONE', messages: all }).catch(() => {});
+      safeSend({ type: 'DROP_DONE', messages: all, complete: complete }).catch(() => {});
     } catch (e) {
       console.warn('[MTEAM] drop session error', e);
       dropSession = null;

@@ -63,7 +63,7 @@ let tradesSortDir = 'desc';  // 交易记录排序
 let apiKeyInvalidShown = false;  // 令牌失效弹窗会话级去重（避免每次 state 更新都弹；用户保存新 key 后重置）
 let tradesFilter = { text: '', dateFrom: '', dateTo: '', exact: false, rarities: new Set(), mech: false, titles: new Set(), side: null }; // 交易记录搜索条件（前端临时；exact=精确等于，否则模糊包含；side=buy/sell 筛选）
 let ordersFilter = { text: '', dateFrom: '', dateTo: '', exact: false, rarities: new Set(), mech: false, titles: new Set() }; // 挂单搜索条件（前端临时）
-let inventoryFilter = { text: '', rarities: new Set(), mech: false, exact: false, titles: new Set(), source: new Set(), lock: false }; // 持有卡片筛选（文本 + 稀有度/机制卡/称号/来源/锁定多选）
+let inventoryFilter = { text: '', rarities: new Set(), mech: false, exact: false, titles: new Set(), source: new Set(), lock: false, showLocked: false }; // 持有卡片筛选（文本 + 稀有度/机制卡/称号/来源/交易锁多选；showLocked=显示手动锁定的卡，默认隐藏）
 
 function send(msg) {
   return new Promise((resolve) => chrome.runtime.sendMessage(msg, (r) => resolve(r)));
@@ -1683,15 +1683,16 @@ function renderDropStats() {
   );
   // 数据实际范围（since 随最新数据动态收窄，不再固定 7/1）
   if (sum.rangeStart && sum.rangeEnd) hero.appendChild(el('div', { cls: 'drop-hero-range', text: sum.rangeStart + ' ~ ' + sum.rangeEnd }));
-  // 「官方接口仅25条」+「可手动补全」+ 按钮，仅 message 接口数据未补全时显示：
-  // 判断用 msgTotal（message 接口 total）——!msgTotal（从未导入）或已导条数 < 接口总数；勿用 rangeStart（不可靠）。补全后整体隐藏
+  // 「数据不完整可补全」CTA：tab 翻全（msgTotal=全库条数）或手动导入补全后自动隐藏；
+  // 显示条件 = message 数据未确认完整——tab 翻页中断（未登录浏览器的典型场景）/从未导入过。
+  // 判断用 msgTotal：!msgTotal（无完整性记录）或已收条数 < msgTotal；勿用 rangeStart（不可靠）
   const _msgTotal = (state.dropStats && state.dropStats.msgTotal) || 0;
   const _needImport = !_msgTotal || (((state.dropStats && state.dropStats.messages) || []).length < _msgTotal);
   if (_needImport) {
     const cta = el('div', { cls: 'drop-hero-cta' });
     const ctaBtn = el('button', { cls: 'seg-btn mini', text: '📥 ' + t('dropStats.importBtn'), attrs: { type: 'button' } });
     ctaBtn.onclick = openDropImportModal;
-    append(cta, el('span', { cls: 'drop-hero-cta-text', text: t('dropStats.feedNote') + ' · ' + t('dropStats.importHint') }), ctaBtn);
+    append(cta, el('span', { cls: 'drop-hero-cta-text', text: t('dropStats.importHint', { n: sum.totalCards }) }), ctaBtn);
     hero.appendChild(cta);
   }
 
@@ -3524,8 +3525,10 @@ function filterInventory(list) {
   const hasTitle = f.titles && f.titles.size > 0;
   const hasSource = f.source && f.source.size > 0;
   const hasLock = !!f.lock;
-  if (!kws.length && !hasRarity && !hasTitle && !hasSource && !hasLock) return list;
+  const hideUserLocked = !f.showLocked;  // 默认隐藏手动锁定的卡（独立于交易锁 tradeLockUntil；与批量卖出默认跳过锁卡一致）
+  if (!kws.length && !hasRarity && !hasTitle && !hasSource && !hasLock && !hideUserLocked) return list;
   return list.filter((it) => {
+    if (hideUserLocked && isUserLocked(it)) return false;
     const mech = isMechCard(it);
     if (hasRarity) {
       if (mech) { if (!f.mech) return false; }
@@ -4289,7 +4292,7 @@ function buildInventoryCard(it, delay) {
 // 稀有度筛选 chips：每次 renderInventory 重建（文本实时取，防切语言 stale）
 // 稀有度/机制卡筛选 chips 公共构造（持有/交易/挂单三视图共用）
 // 筛选 chips 公共构造（分组：稀有度[含机制卡] → 来源[持有独有] → 称号）
-function buildFilterChips(boxId, filterObj, renderFn, withSource) {
+function buildFilterChips(boxId, filterObj, renderFn, withSource, withLock) {
   const box = $(boxId);
   if (!box) return;
   box.replaceChildren();
@@ -4331,6 +4334,15 @@ function buildFilterChips(boxId, filterObj, renderFn, withSource) {
       renderFn();
     }));
   });
+  // 手动锁开关（持有独有）：称号后，文字 + 勾选框；默认隐藏手动锁卡，勾选后显示
+  if (withLock) {
+    const lbl = el('label', { cls: 'chip-group-label inv-lock-toggle', attrs: { title: t('inv.showLockedHint') } });
+    append(lbl, el('span', { text: t('inv.showLocked') }), el('input', { attrs: { type: 'checkbox' } }));
+    const cb = lbl.querySelector('input');
+    cb.checked = !!filterObj.showLocked;
+    cb.addEventListener('change', () => { filterObj.showLocked = cb.checked; renderFn(); });
+    box.appendChild(lbl);
+  }
 }
 // 市场称号筛选（多选，空=不限；称号名站点术语不译，切语言经 renderAll 重建）
 let marketTitleFilter = new Set();
@@ -4457,7 +4469,7 @@ async function runSearch() {
   searching = false;
   renderCards();
 }
-function buildInventoryChips() { buildFilterChips('inventoryRarityBox', inventoryFilter, renderInventory, true); }
+function buildInventoryChips() { buildFilterChips('inventoryRarityBox', inventoryFilter, renderInventory, true, true); }
 function buildTradesChips() { buildFilterChips('tradeRarityBox', tradesFilter, renderTrades, false); }
 function buildOrdersChips() { buildFilterChips('orderRarityBox', ordersFilter, renderOrders, false); }
 
@@ -5493,7 +5505,7 @@ function initInventorySearch() {
   if (ex) ex.addEventListener('change', (e) => { inventoryFilter.exact = e.target.checked; renderInventory(); });
   const clr = $('inventorySearchClear');
   if (clr) clr.onclick = () => {
-    inventoryFilter = { text: '', rarities: new Set(), mech: false, exact: false, titles: new Set(), source: new Set(), lock: false };
+    inventoryFilter = { text: '', rarities: new Set(), mech: false, exact: false, titles: new Set(), source: new Set(), lock: false, showLocked: false };
     if (txt) txt.value = '';
     if (ex) ex.checked = false;
     renderInventory(); // buildInventoryChips 依新 inventoryFilter 重建 chips 选中态，无需手动清 on

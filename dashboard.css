@@ -1808,6 +1808,9 @@ body.no-token .layout > main { display: none !important; }
 .batch-check { position: absolute; top: 6px; left: 6px; width: 18px; height: 18px; border-radius: 5px; border: 2px solid var(--border-strong); background: var(--surface); z-index: 5; display: grid; place-items: center; opacity: 0; transition: opacity 0.15s; }
 .batch-mode:hover .batch-check { opacity: 1; }
 .card[data-own-listing="1"] .batch-check { display: none; }  /* 自挂单不可批量选：隐藏勾选框 */
+
+/* 「显示锁定」开关（持有筛选条尾部，复用 chip-group-label 样式；补 checkbox 对齐 + 可点交互） */
+.trades-search .chips .inv-lock-toggle { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; user-select: none; }
 .batch-check.checked { opacity: 1; background: var(--accent); border-color: var(--accent); }
 .batch-check.checked::after { content: '✓'; color: #fff; font-size: 12px; font-weight: 700; }
 .batch-mode.batch-locked { opacity: 0.4; }

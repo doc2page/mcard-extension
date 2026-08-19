@@ -278,6 +278,8 @@ registerMessages('zh', {
   'common.unitPerDay': ' 张/天',
   'inv.locked': '冷却中',
   'inv.tradable': '可交易',
+  'inv.showLocked': '显示锁定',
+  'inv.showLockedHint': '默认隐藏手动锁定的卡片；勾选后显示',
   'inv.ask': '询价',
   'inv.sell': '卖出',
   'inv.sellPlaceholder': '净卖价（到手魔力）',
@@ -381,8 +383,7 @@ registerMessages('zh', {
   'dropStats.rangeN': '近{n}天',
   'dropStats.rangeAll': '全部',
   // 手动导入掉落记录（粘贴 message search 响应 JSON，补全 feed 之前的全量历史）
-  'dropStats.feedNote': '官方接口目前仅返回最新的 25 条掉卡记录',
-  'dropStats.importHint': '掉落数据不完整，可手动补全：',
+  'dropStats.importHint': '当前只获取到 {n} 条记录，掉落数据不完整，可手动补全：',
   'dropStats.importBtn': '导入掉落记录',
   'dropStats.importTitle': '导入掉落记录',
   'dropStats.importDo': '导入',

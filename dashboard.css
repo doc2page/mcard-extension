@@ -910,7 +910,7 @@ button.stat.active .stat-val { color: var(--accent); }
 .th-modal .preset-card .th-group-title { font-size: 13px; font-weight: 800; }  /* 「预设」标题单独调大加粗，不影响通用 .th-group-title */
 .th-modal .preset-card { margin-top: 14px; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); }
 /* 卡片区上方工具条（按价格/按分类），右对齐 */
-.grid-toolbar { display: flex; justify-content: flex-end; margin: 0 0 10px; gap: 8px; }
+.grid-toolbar { display: flex; justify-content: space-between; margin: 0 0 10px; gap: 8px; }  /* 刷新按钮居左，显示模式居右 */
 /* 市场刷新按钮（统一入口触发；请求生命周期内 spin） */
 .grid-refresh {
   display: inline-grid; place-items: center;

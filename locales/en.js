@@ -63,7 +63,7 @@ registerMessages('en', {
   'token.modalTitle': 'Set M-Team API Token',
   'token.modalHintPre': 'The extension fetches data directly from api.m-team.cc and needs an x-api-key. Get one at the m-team lab:',
   'token.modalHintPost': ' . Generate an API key and paste it below. Stored locally only, never uploaded.',
-  'token.modalConsent': '※ The extension opens background tabs during use (e.g. purchases, drop stats). Using it means you acknowledge and consent to this.',
+  'token.modalConsent': '※ The extension opens a background tab during use (drop stats only). Using it means you acknowledge and consent to this.',
   'token.modalPlaceholder': 'Paste x-api-key token',
   'token.modalSave': 'Save & refresh',
   'token.errVerify': 'Verification failed, please retry',

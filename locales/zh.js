@@ -68,7 +68,7 @@ registerMessages('zh', {
   'token.modalTitle': '设置 M-Team API 令牌',
   'token.modalHintPre': '扩展通过 api.m-team.cc 直连采集数据，需要 x-api-key 访问令牌。前往 m-team 实验室获取：',
   'token.modalHintPost': ' 。生成访问令牌（Api key）后粘贴到下方。令牌仅保存在本地，不上传任何服务器。',
-  'token.modalConsent': '※ 扩展使用过程中会新开后台标签页打开相关页面（如购买、掉落统计），使用本扩展即代表您知悉并同意该行为。',
+  'token.modalConsent': '※ 扩展使用过程中会新开后台标签页打开相关页面（仅掉落统计），使用本扩展即代表您知悉并同意该行为。',
   'token.modalPlaceholder': '粘贴 x-api-key 令牌',
   'token.modalSave': '保存并刷新',
   'token.errVerify': '验证失败，请重试',

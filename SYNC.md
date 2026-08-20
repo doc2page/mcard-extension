@@ -60,7 +60,7 @@
 ## 三、不适用项（勿同步）
 
 - Docker 部署类：非 root、HEALTHCHECK、SIGTERM、compose 资源/日志限制、备份/恢复/升级文档
-- 启动揭幕 splash（Web 打开仪式，扩展无此场景）
+- ~~启动揭幕 splash~~（2026-08-19 已同步：双档时间轴同构，完整仪式档绑「首次保存令牌成功」——扩展无登录页，以 reload 重开面板替代 Docker 的登录跳转）
 - 鉴权模块（AUTH_PASSWORD/HMAC——扩展由浏览器配置页权限管）
 - SSE 相关（扩展无服务端推送）
 

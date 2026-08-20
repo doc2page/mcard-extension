@@ -87,6 +87,45 @@ function append(parent, ...kids) {
 }
 function $(id) { return document.getElementById(id); }
 
+// ============ 启动揭幕：开箱抽卡（同步自 mcard(Docker) app.js，双档时间轴同构） ============
+// 平时打开 dashboard 压缩版（~1.3s 固定揭幕，不等数据——首拉 state 大 JSON 时曾拖到 ~2.8s，界面在遮罩下渲染，揭开即见）；
+// 首次保存令牌成功后 reload 播完整仪式（种 sessionStorage mcard.splash.full → #splash.full 放宽时间变量，用后即清，~2.8s）。
+var _splashT0 = Date.now();
+var _splashDone = false;
+var _splashMin = 1100;       // 最短展示：压缩版 1.1s（编排走完），full 版在 initSplash 里放宽到 2s
+function dismissSplash() {
+  if (_splashDone) return;
+  _splashDone = true;
+  var sp = $('splash');
+  if (!sp) return;
+  sp.classList.add('leave');
+  setTimeout(function () { if (sp && sp.parentNode) sp.remove(); }, 950);  // leave 动画 0.6s + 遮罩淡出 0.15s delay，兜底移除
+}
+function splashReady() {  // 首屏数据就绪：展示满 _splashMin 再揭幕
+  var wait = Math.max(0, _splashMin - (Date.now() - _splashT0));
+  setTimeout(dismissSplash, wait);
+}
+(function initSplash() {
+  var sp = $('splash');
+  if (!sp) return;
+  var full = false;
+  try {
+    if (sessionStorage.getItem('mcard.splash.full') === '1') {
+      sessionStorage.removeItem('mcard.splash.full');
+      sp.classList.add('full');
+      _splashMin = 2000;
+      full = true;
+    }
+  } catch (e) {}
+  if (full) {
+    setTimeout(dismissSplash, 5000);                     // 完整版：数据就绪+≥2s 揭幕（splashReady），5s 上限兜底
+  } else {
+    setTimeout(dismissSplash, 1300);                     // 平时：固定节奏揭幕，不等数据
+  }
+  sp.addEventListener('click', dismissSplash);           // 点击跳过（cursor:pointer 已提示）
+  window.addEventListener('keydown', dismissSplash, { once: true });
+})();
+
 // ---------- 数据拉取 ----------
 async function refresh(changedKeys) {
   state = await send({ type: 'GET_STATE' });
@@ -5391,6 +5430,7 @@ function initTokenModal() {
   var verifying = false;
   function syncSaveDisabled() { if (!verifying) save.disabled = consent ? !consent.checked : false; }
   if (!modal || !input || !save) return;
+  var firstSetup = !state.mtApiKey;   // 首次设置令牌（保存成功 → reload 播完整开箱仪式；后续换 key 不播）
   if (!state.mtApiKey) openTokenModal();
   if (consent) consent.addEventListener('change', syncSaveDisabled);
   var _siteSel = $('tokenModalSite');
@@ -5413,6 +5453,12 @@ function initTokenModal() {
       modal.hidden = true;
       document.body.classList.remove('no-token');
       apiKeyInvalidShown = false;  // 新 key 已保存，重置失效弹窗 guard，下次失效可再弹
+      if (firstSetup) {
+        // 首次配置成功 = 开箱时刻：种完整仪式标记后重开面板（refreshAll 已在 SW 后台跑，不受 reload 影响）
+        try { sessionStorage.setItem('mcard.splash.full', '1'); } catch (e) {}
+        location.reload();
+        return;
+      }
       state = await send({ type: 'GET_STATE' });
       renderAll();
       triggerMarketRefresh(true);   // 验证后立即触发市场采集（force 绕节流；refreshAll 的 ensure 前置慢、市场 startRound 排最后，先采一轮让市场尽快出卡）
@@ -5437,6 +5483,7 @@ function applyLabUrl() {
 // ---------- 启动 ----------
 (async () => {
   state = await send({ type: 'GET_STATE' });
+  splashReady();   // 首屏数据就绪：splash 展示满最短时长后揭幕（full 版 ≥2s；平时档固定 1.3s 不等数据）
   initLang(state && state.config && state.config.lang);
   var _langBtn = document.getElementById('langBtn');
   if (_langBtn) _langBtn.addEventListener('click', function () { setLang(getI18nLang() === 'en' ? 'zh' : 'en'); });

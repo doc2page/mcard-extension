@@ -11,6 +11,24 @@
   <script src="lang-bootstrap.js"></script>
 </head>
 <body>
+  <!-- 启动揭幕：开箱抽卡（卡背悬浮→翻面→白闪→金光跑圈→金字→冲屏揭幕；数据就绪/超时/点击 触发，见 dashboard.js dismissSplash。
+       平时压缩时间轴；首次保存令牌成功播完整仪式（种 sessionStorage 标记 + #splash.full 放宽时间变量） -->
+  <div id="splash" role="presentation">
+    <div class="sp-scene">
+      <div class="sp-card">
+        <div class="sp-inner">
+          <div class="sp-face sp-back" aria-hidden="true"></div>
+          <div class="sp-face sp-front">
+            <img class="sp-logo" src="logo.png" alt="" />
+            <div class="sp-word" aria-label="MCard"><span>M</span><span>C</span><span>a</span><span>r</span><span>d</span></div>
+          </div>
+        </div>
+        <div class="sp-ring" aria-hidden="true"></div>
+        <div class="sp-flash" aria-hidden="true"></div>
+      </div>
+    </div>
+  </div>
+
   <div class="bg-fx" aria-hidden="true"></div>
 
   <header class="topbar">

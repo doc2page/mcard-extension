@@ -70,6 +70,7 @@ const DEFAULT_STATE = {
   cardLogs: [],                         // 魔力符券开卡记录（来源 /api/credit/logs type=CARD_MECHANISM）：[{id,createdDate,bonus,paid}]，按 id 去重、降序
   cardLogSummary: null,                 // cardLogs 聚合（computeCardLogSummary 结果，merge/启动时重算）
   cancelFailedOrders: [],               // cancel 撤单 3 次重试全失败的残留挂单记录（v0.2.5，为未来查看页预留）：[{orderId,filmId,rarity,provenance,price,url,ts}]
+  redemptions: [],                      // 兑换机制符历史：[{recipeId,mechType,count,at}]（成功兑换追加，前端统计卡展示）
 };
 
 // ============ 存储 helpers ============
@@ -300,6 +301,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         case 'BUY_CARD':      return sendResponse(await buyCard(msg));
         case 'SELL_CARD':     return sendResponse(await sellCard(msg));
         case 'CANCEL_ORDER':  return sendResponse(await cancelOrder(msg));
+        case 'REDEMPTION':    return sendResponse(await redemption(msg));
+        case 'RELIST_BUY':    return sendResponse(await relistBuy(msg));
+        case 'PROBE_TOTALS':  return sendResponse(await probeTotals(msg));
         case 'LOAD_TRADES':   return sendResponse(await ensureMyTrades(true));
         case 'LOAD_ORDERS':   return sendResponse(await ensureMyOrders(true));
         case 'LOAD_INVENTORY':  return sendResponse(await ensureInventoryData(true));
@@ -561,6 +565,62 @@ async function cancelOrder(msg) {
     ]);
   }
   return { ok: true };
+}
+
+// ============ 普通卡兑换机制符（10 换 1） ============
+// 恰好 10 张同稀有度普通卡 → 1 张机制符。recipeId 1=魔力符(N) 2=置顶免费符(SR) 3=VIP符(UR)。
+// 后端双重校验（前端已拦，防前端状态过期/绕过）：10 个不同 cardId + inventory 回查均为普通卡、稀有度匹配、未手动锁定。
+// 挂单卡不在 inventory（回查 miss 即拒）；冷却卡（tradeLockUntil）可兑，官方允许。
+// 同步自 mcard(Docker) trader.js redemption（lockedCards 存储位置适配：扩展为顶层键）。
+const REDEMPTION_RECIPES = {
+  1: { rarity: 'N', mechType: 'mana_voucher' },
+  2: { rarity: 'SR', mechType: 'single_free' },
+  3: { rarity: 'UR', mechType: 'vip_7d' },
+};
+async function redemption(msg) {
+  const recipe = REDEMPTION_RECIPES[msg.recipeId];
+  const cardIds = Array.isArray(msg.cardIds) ? msg.cardIds : [];
+  if (!recipe) return { ok: false, reason: 'unknown_recipe' };
+  if (cardIds.length !== 10) return { ok: false, reason: 'need_exact_10' };
+  const ids = Array.from(new Set(cardIds.map(Number)));
+  if (ids.length !== 10) return { ok: false, reason: 'need_exact_10' };  // 有重复 cardId
+  const st = await getAll();
+  const byId = new Map((st.inventory || []).map((c) => [String(c.cardId), c]));
+  const locked = new Set((st.lockedCards || []).map(String));
+  for (const id of ids) {
+    const c = byId.get(String(id));
+    if (!c || isMechCard(c) || c.rarity !== recipe.rarity) return { ok: false, reason: 'card_mismatch', cardId: id };
+    if (locked.has(String(id))) return { ok: false, reason: 'card_locked', cardId: id };
+  }
+  let json;
+  try {
+    json = await mtFetch('/api/pt-card/redemption/submit', { cardIds: ids, recipeId: Number(msg.recipeId) });
+  } catch (e) {
+    return { ok: false, reason: 'redeem_failed' };  // API_KEY_INVALID / 网络错
+  }
+  if (!json || String(json.code) !== '0' || !json.data) return { ok: false, reason: 'redeem_failed' };
+  const reward = (json.data && json.data.reward) || {};
+  // 本地记录兑换历史（前端统计卡展示已兑换分类/数量；写前重读防覆盖并发写）
+  const st2 = await getAll();
+  await set({ redemptions: (st2.redemptions || []).concat([{ recipeId: Number(msg.recipeId), mechType: reward.mechType || recipe.mechType, count: ids.length, at: Date.now() }]) });
+  return { ok: true, mechType: reward.mechType || recipe.mechType, mechCardId: reward.mechCardId || null };
+}
+
+// 挂买改价专用：纯限价买单——open 未成交 = 挂上（不撤），filled = 直接成交。
+// 不走 buyCard 的预算池/价格阈值门与「open 即撤」逻辑（改价语义 = 调整既有挂单价格，非新买入决策）。
+// 同步自 mcard(Docker) trader.js relistBuy（BUY_CARD 是吃单语义 open 即撤+预算门，不能用于改价重挂，Docker 踩过坑）。
+async function relistBuy(msg) {
+  const variant = msg.variant || {};
+  const price = Number(msg.price);
+  if (!variant.filmId || !Number.isFinite(price) || price <= 0) return { ok: false, reason: 'buy_failed' };
+  let json;
+  try {
+    json = await mtFetch('/api/pt-card/market/buy', { filmId: variant.filmId, rarity: variant.rarity, provenance: variant.provenance, price: price });
+  } catch (e) {
+    return { ok: false, reason: 'buy_failed' };  // API_KEY_INVALID / 网络错
+  }
+  if (!json || String(json.code) !== '0' || !json.data) return { ok: false, reason: 'buy_failed' };
+  return { ok: true, filled: String(json.data.status) === 'filled' };
 }
 
 // ============ 交易记录 + 挂单：翻页直连（mytrades 增量衔接 / myorders 每次全量）============
@@ -918,6 +978,45 @@ function normalizeInventory(it) {
 // 机制卡持有（mechanism/list，body 空，data 直接数组；usedAt!=null 已使用销毁）
 async function fetchMechanismList() {
   return mtFetch('/api/pt-card/mechanism/list', {});
+}
+
+// ============ 轻量探测（变化角标用）：只拿各接口 total，不写 storage、不触发采集合并 ============
+// 5 个小请求（pageSize=10；机制卡接口无分页、data 即全量按未使用过滤），串行 + randSleep 保持节奏。
+// 8s 冷却：窗口内重复调用且同参数直接返回上次结果（防高频打开页面的请求放大，cached 标记）。
+// SW 内存冷却变量，被杀重置无害（多探一次不伤）。同步自 mcard(Docker) collector.js probeTotals。
+// msg.ordersMaxId：本地 ordersAll 最大记录 id——myorders 拉最新一页（pageSize=100，接口 lastId/status 参数均无效已实测），
+// 数「id 大于该值的记录」= 新增挂单记录数（上架/下架/撤单不产生新记录，天然零误报；接口 total 是全部历史记录数，数字对比无意义）。
+// 其余接口 total 对比即准确。
+let _lastProbeAt = 0;
+let _lastProbeTotals = null;
+let _lastProbeArgs = '';
+async function probeTotals(msg) {
+  const args = JSON.stringify(msg && msg.ordersMaxId);
+  if (_lastProbeTotals && Date.now() - _lastProbeAt < 8000 && args === _lastProbeArgs) return { ok: true, cached: true, totals: _lastProbeTotals };  // 8s 冷却（与市场刷新同级）；同参数才复用缓存
+  _lastProbeAt = Date.now();
+  _lastProbeArgs = args;
+  const totals = {};
+  const tryFetch = async (key, path, body, pick) => {
+    try {
+      const r = await mtFetch(path, body);
+      const v = pick(r);
+      totals[key] = Number.isFinite(v) ? v : null;   // 单项失败/异常置 null，前端跳过该项对比
+    } catch (e) { totals[key] = null; }
+    await randSleep(400, 900);
+  };
+  const pickTotal = (r) => Number(r && r.data && r.data.total) || 0;
+  await tryFetch('trades', '/api/pt-card/market/myTrades', { pageNumber: 1, pageSize: 10 }, pickTotal);
+  // myorders：最新一页 100 条，数 id > 本地最大记录 id 的条数 = 新增挂单记录（一页全超则封顶 100，角标 99+ 兜底）
+  const maxId = Number(msg && msg.ordersMaxId) || 0;
+  if (maxId > 0) {
+    await tryFetch('orders', '/api/pt-card/market/myorders', { pageNumber: 1, pageSize: 100 },
+      (r) => Array.isArray(r && r.data && r.data.data) ? r.data.data.filter((o) => Number(o.id) > maxId).length : 0);
+  } else totals.orders = 0;   // 本地无挂单记录（首用）：不产角标
+  await tryFetch('invNormal', '/api/pt-card/inventory', { pageNumber: 1, pageSize: 10 }, pickTotal);
+  await tryFetch('invMech', '/api/pt-card/mechanism/list', {}, (r) => Array.isArray(r && r.data) ? r.data.filter((x) => !x || !x.usedAt).length : 0);  // 未使用口径（对齐本地基准）
+  await tryFetch('marketData', '/api/pt-card/market/tradeHistory', { pageNumber: 1, pageSize: 10 }, pickTotal);
+  _lastProbeTotals = totals;
+  return { ok: true, totals };
 }
 function normalizeMechanism(it) {
   if (!it) return null;

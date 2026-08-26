@@ -71,3 +71,45 @@
 3. **不破坏既有功能**：扩展侧既有 dashboard 结构与交互习惯保持；同步的是「能力与规则」不是「代码原样搬」
 4. **逐项 commit**：一项一 commit（信息注明 SYNC-Sx），commit/push 等用户指令
 5. 卡壳就对照 Docker 源码（路径锚点见各条目），不确定的设计决策问用户
+
+## 五、增量批次 v1.2.2 → v1.4.0（16 项，2026-08-26 由 Docker 线会话写入）
+
+> Docker 线在 v1.2.2 后发了 v1.3.0 / v1.4.0 两个 minor。以下按价值排优先级；完成打 `[x]`，commit 注明 SYNC-S15 起。
+> 参考锚点均为 Docker 线文件（`~/workspace/mcard`）。
+
+### P1 — 核心新功能
+
+- [ ] **S15 普通卡兑换机制符（10 换 1）**
+  - Docker：`trader.js` 的 `redemption`（POST redemption/submit：cardIds 恰好 10 个不同 + recipeId 1=魔力符N/2=置顶免费符SR/3=VIP符UR）+ 双重校验（inventory 回查普通卡/稀有度匹配/未手动锁定；挂单卡不在 inventory 回查即拒；**冷却卡可兑**）+ 成功记 `redemptions` 历史
+  - 前端：持有页兑换统计卡（第一行 3 配方小卡均分——可兑数量=非mech+对应稀有度+剔除手动锁定÷10；第二行「已兑换」嵌套大卡×3 紧凑小卡 ×n 计数）；兑换子模式（点小卡进入：列表强制该稀有度、其它筛选灰显称号可用、显示锁定+解锁通道保留）；自动选（无称号→傳火→薪王升序前 10）+ 手动（恰好 10 封顶、选满灰显其余 `batch-locked`）；浮动面板常驻（X/10 + 自动选 + 兑换按钮未满 10 禁用主题色高亮）；确认模态（10 卡清单白字称号 + 前端最后校验 + 单飞锁提交 + 成功 toast 获得符名 + LOAD_INVENTORY 刷新）
+  - 扩展落点：background.js 加 redemption 消息处理（fetch redemption/submit + chrome.storage 校验与历史）；dashboard.js 兑换 UI（按扩展既有模态风格）
+  - **注意**：批量锁定禁选逻辑要放开冷却卡（`tradeLocked` 卡兑换模式走可选分支且不灰显）
+- [ ] **S16 变化角标（轻量探测）**
+  - Docker：后端 `POST /api/totals`（probeTotals：5 小请求拿 total，不写 state，8s 冷却同参数复用缓存；**myorders 的 lastId/status 参数接口均忽略**——挂单=拉一页 100 条数 id>本地 max 的新增；**ordersAll 是插入序最新在尾部，max 遍历取非 [0]**）+ 前端启动探测对比本地 → 侧栏按钮红底白字胶囊角标（99+ 封顶、弹入动画）→ 进 view 清零；移动端抽屉收起时汉堡按钮红点汇总（无数字）
+  - **形态注意**：曾有 applyPatch 实时 diff + 5s 闪现层，**已撤**（进 view 后采集冷却 skip 导致重复提示烦扰）——只同步探测持久角标形态
+  - 扩展落点：background.js 加 probe 消息（fetch 各接口 total）；dashboard.js 角标渲染 + 进 view 清零
+- [ ] **S17 定向搜索词条筛选**
+  - Docker：词条结构 `{name, rarities[], titles[], maxPrices{}}`（旧字符串兼容=无筛选）；新增/编辑模态（`+` 与词条 `✎` 共用：片名 + 稀有度勾选+每档最大价 + 称号多选，不选=全要）；runSearch 逐词条查询+前端过滤（勾称号时无称号卡排除，同市场语义）+合并去重；卡册放大镜联动（片名锁定只读、稀有度默认勾该影片未拥有档、已设词条自动转编辑+图标变铅笔）；胶囊按词条名 hash 稳定随机色（深浅主题各配 8 色板，**实色彩底白字**，非色点非 tint——曾两版返工）；卡册 `_sig` 拼入词条名单（加/删词条重绘同步图标）
+  - 扩展落点：dashboard.js 词条模态 + runSearch 过滤 + 胶囊配色；背景侧 searchTags 存储结构兼容旧字符串
+- [ ] **S18 挂买管理补全**
+  - Docker：`trader.relistBuy`（纯限价挂买：撤单后 `/api/pt-card/market/buy` 限价重挂，open 即挂上**不撤**、无预算/阈值门——BUY_CARD 是吃单语义 open 即撤+预算门，**不能用于改价重挂**，曾踩坑）；改价按 side 分流（sell=撤+挂卖净价 / buy=撤+relistBuy）；`confirmDialog` 加 `onConfirm` 模式（确认后按钮 loading 禁用 → await 网络操作 → 才关模态；busy 期间 Esc/取消/遮罩全拦）；挂单 view 挂买/挂卖互斥单选筛选按钮（排序按钮前，再点取消，清除按钮重置）
+  - 扩展落点：background.js relistBuy 消息；dashboard.js 改价分流 + confirmDialog onConfirm + 筛选按钮
+
+### P2 — 修复
+
+- [ ] **S19 inventory 采集 >200 张漏尾**：单页 pageSize=200 上限 → 翻页拿全（`while rawItems.length < total`，页间 randSleep，上限 20 页）——变化角标恒差的根因
+- [ ] **S20 runSearch 渲染竞态**：搜索慢返回时 `renderCards()` 无条件渲染会写进挂单等其它 view 的 grid——三处调用（清空/loading/结果）加 `if (view === 'market')` 守卫
+- [ ] **S21 持有称号过滤对机制卡生效**：normalizeMechanism 缺 title 映射（空 title 全放行点任何称号 mech 都出现）→ 补 `title: it.title || '傳火'`（机制卡固定傳火，与交易/挂单记录接口数据一致）
+- [ ] **S22 批量改价/卖出单框双态**：输入框 focus=净卖价可编辑；blur/初始/执行中=显示挂单价（净×1.05，muted 弱化 + tooltip 双价）；顶部批量设价应用后行未聚焦直接显示挂单价；数据层 netPrice 永远存净价
+- [ ] **S23 兑换模式冷却卡可选**：buildInventoryCard 的 `!tradeLocked && !userLocked` 可选分支——兑换模式放开 tradeLocked（官方允许冷却卡兑换）且不灰显；`batchSelected.size===0 && !redeemMode` 才收面板（兑换模式面板常驻）
+
+### P3 — 打磨
+
+- [ ] **S24 侧栏版本行**：当前版本（GET /api/version）+ 最新版本（GitHub releases 实时读，失败直说「获取失败」不强求）；有新版金色高亮 + 点击新 tab 打开 release 页；版本值缓存 `_curVersion/_latestVersion` 挂 renderStatus（切语言实时切换）。扩展落点：manifest version 当当前版本 + fetch releases API（CORS 允许）
+- [ ] **S25 移动端预算面板重排**（若扩展侧上轮已含预算面板）：移动端顶栏预算卡隐藏（300px 悬浮卡遮盖顶栏），改市场工具行右侧紧凑版（数字 K/M/B 紧凑格式保 2 位小数、进度条分级配色与桌面同）
+- [ ] **S26 价格阈值模态移动端稀有度输入框收窄**（120px→82px 防溢出，机制卡行不动）
+
+### 不适用项（本批新增）
+
+- Docker 部署类：Dockerfile npmmirror、npm ci 层缓存 rm -rf /root/.npm、SIGTERM/HEALTHCHECK（已在上轮不适用清单）
+- 角标实时层（5s 闪现）——Docker 线已撤，勿同步

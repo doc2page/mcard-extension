@@ -1328,6 +1328,8 @@ button.stat.active .stat-val { color: var(--accent); }
 @media (max-width: 860px) {
   .layout { grid-template-columns: 1fr; }
   .sidebar { position: static; }
+  /* 价格阈值模态：稀有度行输入框收窄防溢出（默认 120px 固定宽撑破窄屏；只动稀有度行，机制卡行单列全宽不动） */
+  .th-modal .threshold-list .th-row:not(.th-row-mech) .th-input { width: 82px; flex: none; font-size: 12px; padding: 6px 8px; }
   /* 移动端预算魔力池：顶栏版隐藏（300px 悬浮卡曾遮盖顶栏 brand/按钮），改市场工具行右侧紧凑版 */
   .topbar > .budget-bar-wrap { display: none !important; }
   body[data-view="market"] .budget-mobile:not(.off) {

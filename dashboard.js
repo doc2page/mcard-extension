@@ -501,6 +501,7 @@ function triggerMarketRefresh(force) {
 
 function toggleView(v) {
   view = v;
+  document.body.dataset.view = v;   // 移动端预算条等 CSS 按 body[data-view] 控制显隐
   if (v !== 'inventory') redeemMode = null;   // 切出持有 view：退出兑换子模式
   if (viewBadges[v] !== undefined && viewBadges[v] > 0) { viewBadges[v] = 0; renderBadges(); }  // 进 view 清零持久角标（已看=已知悉）
   if (batchInView && batchInView !== v) clearBatchSelection(false);  // 切 view 清批量选择（renderLive 会重绘新 view）
@@ -637,10 +638,15 @@ function makeEyeBtn() {
 // 预算魔力池进度条：渲染到顶栏资料卡右侧 #budgetBar（仅设置了预算才显示，并比对账户余额）
 function renderBudgetBar(p) {
   const bb = $('budgetBar');
+  const bbM = $('budgetBarMobile');
   if (!bb) return;
   const bg = (state.config && state.config.budget) || {};
   const bTotal = Number(bg.total) || 0;
-  if (bTotal <= 0) { bb.style.display = 'none'; bb.replaceChildren(); return; }
+  if (bTotal <= 0) {
+    bb.style.display = 'none'; bb.replaceChildren();
+    if (bbM) { bbM.classList.add('off'); bbM.replaceChildren(); }
+    return;
+  }
   const spent = Number(bg.spent) || 0;
   const remaining = bTotal - spent;
   const bonus = Number(p && p.bonus) || 0;
@@ -663,6 +669,13 @@ function renderBudgetBar(p) {
   append(card, bar);
   if (acShort) append(card, el('div', { cls: 'pc-budget-warn', text: t('budget.balanceLowWarn', { bonus: fmtNum(bonus) }) }));
   bb.appendChild(card);
+  if (bbM) {  // 移动版同步一份：数字换 K/M/B 紧凑格式（窄空间防溢出）
+    const mc = card.cloneNode(true);
+    const mv = mc.querySelector('.pc-budget-val');
+    if (mv) mv.textContent = t('budget.usableOf', { usable: fmtCompact(usable), total: fmtCompact(bTotal) });
+    bbM.classList.remove('off');
+    bbM.replaceChildren(mc);
+  }
 }
 
 // ---------- 卡片网格 ----------
@@ -5645,6 +5658,13 @@ function cardName(it) {
 }
 function fmtNum(n) {
   return Number(n).toLocaleString('en-US');
+}
+function fmtCompact(n) {
+  n = Number(n) || 0;
+  if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B';
+  if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(2) + 'K';
+  return String(Math.round(n * 100) / 100);
 }
 function fmtBytes(s) {
   const n = Number(s);

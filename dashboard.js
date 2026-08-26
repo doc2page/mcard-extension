@@ -213,8 +213,46 @@ function probeAndBadge() {
 }
 
 // ---------- 状态区 ----------
+// ---------- 侧栏版本行：当前版本（manifest）+ 最新版本（GitHub releases 实时读，失败直说不强求） ----------
+var _latestVersion = null;   // null=未查/查询中；false=失败；string=最新 tag（v 前缀已去）
+var _curVersion = '';        // 当前运行版本缓存（切语言重渲染用——renderStatus 无异步拿不到）
+function renderVersionBox() {
+  const box = $('versionBox');
+  if (!box) return;
+  const cur = _curVersion;
+  box.replaceChildren();
+  const l1 = el('div', { text: t('panel.curVersion') + ' ' + (cur || '—') });
+  var lt;
+  if (_latestVersion === null) lt = t('panel.versionChecking');
+  else if (_latestVersion === false) lt = t('panel.versionFail');
+  else {
+    lt = _latestVersion;
+    if (cur && _latestVersion !== cur) lt += ' · ' + t('panel.versionNewer');   // 有新版高亮提示
+  }
+  const l2 = el('div', { cls: (typeof _latestVersion === 'string' && cur && _latestVersion !== cur) ? 'vb-newer' : '', text: t('panel.latestVersion') + ' ' + lt });
+  // 最新版本行：点击新 tab 打开 GitHub releases（查到/失败均可点——失败时让用户自己去看也合理）
+  l2.title = 'GitHub Releases';
+  l2.style.cursor = 'pointer';
+  l2.onclick = () => chrome.tabs.create({ url: 'https://github.com/doc2page/mcard-extension/releases/latest' });
+  append(box, l1, l2);
+}
+function initVersionBox() {
+  try { _curVersion = chrome.runtime.getManifest().version || ''; } catch (e) {}
+  // GitHub releases 最新版（公开 API，CORS 允许）；8s 超时兜底，失败直说（不强求）
+  const ctrl = new AbortController();
+  setTimeout(() => ctrl.abort(), 8000);
+  fetch('https://api.github.com/repos/doc2page/mcard-extension/releases/latest', { signal: ctrl.signal })
+    .then((r) => (r.ok ? r.json() : null))
+    .then((j) => {
+      _latestVersion = (j && j.tag_name) ? String(j.tag_name).replace(/^v/, '') : false;
+      renderVersionBox();
+    })
+    .catch(() => { _latestVersion = false; renderVersionBox(); });
+}
+
 function renderStatus() {
   if (!state) return;
+  renderVersionBox();   // 版本行随状态/语言刷新（版本值走缓存 _curVersion/_latestVersion，无异步）
   $('buyCount').textContent = (state.buyHistory && state.buyHistory.length) || 0;
   const oc = $('ordersCount'); if (oc) oc.textContent = ((state.ordersAll || []).filter((o) => o.status === 'open')).length;
   const _invAll = ((state.inventory || []).concat((state.mechInventory || []).filter((m) => !m.isUsed)));
@@ -5916,6 +5954,7 @@ function applyLabUrl() {
   initTokenPanel();
   if (!state.mtApiKey) document.body.classList.add('no-token');
   initTokenModal();
+  initVersionBox();
   // 加载时刷新市场（统一入口：节流 + spin）
   triggerMarketRefresh();
   probeAndBadge();   // 轻量探测各 view 差值 → 侧栏角标

@@ -62,7 +62,7 @@ let invSortDir = 'desc';     // 持有卡片排序
 let tradesSortDir = 'desc';  // 交易记录排序
 let apiKeyInvalidShown = false;  // 令牌失效弹窗会话级去重（避免每次 state 更新都弹；用户保存新 key 后重置）
 let tradesFilter = { text: '', dateFrom: '', dateTo: '', exact: false, rarities: new Set(), mech: false, titles: new Set(), side: null }; // 交易记录搜索条件（前端临时；exact=精确等于，否则模糊包含；side=buy/sell 筛选）
-let ordersFilter = { text: '', dateFrom: '', dateTo: '', exact: false, rarities: new Set(), mech: false, titles: new Set() }; // 挂单搜索条件（前端临时）
+let ordersFilter = { text: '', dateFrom: '', dateTo: '', exact: false, rarities: new Set(), mech: false, titles: new Set(), side: null }; // 挂单搜索条件（前端临时；side=null|'buy'|'sell' 挂买/挂卖互斥单选筛选）
 let inventoryFilter = { text: '', rarities: new Set(), mech: false, exact: false, titles: new Set(), source: new Set(), lock: false, showLocked: false }; // 持有卡片筛选（文本 + 稀有度/机制卡/称号/来源/交易锁多选；showLocked=显示手动锁定的卡，默认隐藏）
 
 function send(msg) {
@@ -932,6 +932,9 @@ function renderOrdersStats() {
   if (!box) return;
   const all = (state && state.ordersAll) || [];
   const total = (state && state.ordersTotal) || all.length;
+  const sb0 = $('orderSideBuyBtn'), ss0 = $('orderSideSellBtn');
+  if (sb0) sb0.classList.toggle('side-on', ordersFilter.side === 'buy');
+  if (ss0) ss0.classList.toggle('side-on', ordersFilter.side === 'sell');
   const open = all.filter((o) => o.status === 'open');
   const filled = all.filter((o) => o.status === 'filled').length;
   const cancelled = all.filter((o) => o.status === 'cancelled').length;
@@ -1284,8 +1287,9 @@ function filterOrders(list) {
   const hasDate = !!(f.dateFrom || f.dateTo);
   const hasRarity = f.mech || (f.rarities && f.rarities.size > 0);
   const hasTitle = f.titles && f.titles.size > 0;
-  if (!kws.length && !hasDate && !hasRarity && !hasTitle) return list;
+  if (!kws.length && !hasDate && !hasRarity && !hasTitle && !f.side) return list;
   return list.filter((it) => {
+    if (f.side && it.side !== f.side) return false;   // 挂买/挂卖互斥单选
     if (hasRarity) {
       const m = isMechCard(it);
       if (m) { if (!f.mech) return false; }
@@ -4412,7 +4416,7 @@ function buildSellBtn(it) {
 }
 
 // 卖出净卖价输入弹窗：手输净卖价 + 含税提示；返回有效净价或 null（取消/无效）
-async function promptSellPrice(it) {
+async function promptSellPrice(it, onConfirm) {
   const input = el('input', { cls: 'modal-input', attrs: { type: 'number', min: '0', step: '1', inputmode: 'numeric', placeholder: t('inv.sellPlaceholder') } });
   // 价格明细：net / 抽水5% / 挂单价（实时算：挂单价 = net × 1.05，抽水 = net × 0.05）
   const netCell = el('span', { cls: 'sd-val' });
@@ -4441,11 +4445,28 @@ async function promptSellPrice(it) {
     input,
     breakdown
   );
-  const ok = await confirmDialog({ hero: buildModalHero(it), body: body, confirmText: t('common.sell'), cancelText: t('common.cancel'), confirmVariant: 'sell' });
-  if (!ok) return null;
+  const ok = await confirmDialog({ hero: buildModalHero(it), body: body, confirmText: t('common.sell'), cancelText: t('common.cancel'), confirmVariant: 'sell',
+    onConfirm: onConfirm ? () => onConfirm(Number(input.value) || 0) : null });
+  if (ok || onConfirm) return null;
   const netPrice = Number(input.value);
   if (!Number.isFinite(netPrice) || netPrice <= 0) { showToast(t('inv.sellInvalidPrice'), 'error'); return null; }
   return netPrice;
+}
+
+// 挂买改价：输入新买价（无税费明细——买单无 5% 抽水），确认回调模式与 promptSellPrice 同构
+async function promptBuyPrice(it, onConfirm) {
+  const input = el('input', { cls: 'modal-input', attrs: { type: 'number', min: '0', step: '1', inputmode: 'numeric', placeholder: t('order.buyPricePh') } });
+  input.value = String(Number(it.price) || '');
+  const body = el('div');
+  append(body,
+    el('div', { cls: 'modal-note', text: t('order.buyModifyNote') }),
+    input
+  );
+  const ok = await confirmDialog({ hero: buildModalHero(it), body: body, confirmText: t('order.relistBuy'), cancelText: t('common.cancel'), confirmVariant: 'buy',
+    onConfirm: onConfirm ? () => onConfirm(Number(input.value) || 0) : null });   // 确认时即时读价；无效价由回调侧校验
+  if (ok || onConfirm) return null;
+  const v = Number(input.value) || 0;
+  return v > 0 ? v : null;
 }
 
 // 持有卡片：复用 trade-card 外观，加交易锁徽章 + 询价/卖出按钮 + 来源/种子数
@@ -5033,7 +5054,24 @@ function confirmDialog(opts) {
     const onKey = (e) => { if (e.key === 'Escape') close(false); };
     document.addEventListener('keydown', onKey);
     cancelBtn.onclick = () => close(false);
-    confirmBtn.onclick = () => close(true);
+    // onConfirm 模式（网络提交型确认，如挂单改价）：确认后按钮 loading 禁用 → await 回调 → 才关模态；
+    // busy 期间 Esc/取消/遮罩关闭全拦（close 检查），防提交中误关丢反馈
+    let _busy = false;
+    const _origClose = close;
+    close = function (result) { if (_busy) return; _origClose(result); };
+    confirmBtn.onclick = async () => {
+      if (!opts.onConfirm) { close(true); return; }
+      if (_busy) return;
+      _busy = true;
+      confirmBtn.disabled = true;
+      const origText = confirmBtn.textContent;
+      confirmBtn.textContent = '…';
+      try { await opts.onConfirm(); } catch (e) { /* 回调自行处理结果 */ }
+      confirmBtn.textContent = origText;
+      confirmBtn.disabled = false;
+      _busy = false;
+      _origClose(true);
+    };
     mask.addEventListener('click', (e) => { if (e.target === mask) close(false); });
   });
 }
@@ -5101,13 +5139,27 @@ async function onOrderModify(it) {
       const r = await send({ type: 'CANCEL_ORDER', orderId: it.id });
       showToast(r && r.ok ? t('order.cancelSuccess') : t('order.cancelFailed'), r && r.ok ? 'success' : 'error');
     } else if (choice === '2') {
-      const netPrice = await promptSellPrice(it);
-      if (netPrice == null) return;
-      const cr = await send({ type: 'CANCEL_ORDER', orderId: it.id });
-      if (!cr || !cr.ok) { showToast(t('order.cancelFailed'), 'error'); return; }
-      const sr = await send({ type: 'SELL_CARD', cardId: it.cardId, isMech: isMechCard(it), netPrice: netPrice });
-      if (sr && sr.ok) { await send({ type: 'LOAD_ORDERS' }); showToast(t('order.modifySuccess'), 'success'); }
-      else showToast(t('order.modifyFailed'), 'error');
+      // 改价按挂单方向分流：sell=撤+挂卖（净卖价）；buy=撤+纯限价挂买（RELIST_BUY，open 即挂上不撤）。
+      // 网络操作经 prompt 的 onConfirm 回调执行——确认按钮 loading 禁用至完成（confirmDialog onConfirm 模式）
+      const isBuyOrder = it.side === 'buy';
+      const runModify = async (newPrice) => {
+        if (!(newPrice > 0)) { showToast(t('order.modifyFailed'), 'error'); return; }
+        const cr = await send({ type: 'CANCEL_ORDER', orderId: it.id });
+        if (!cr || !cr.ok) { showToast(t('order.cancelFailed'), 'error'); return; }
+        if (isBuyOrder) {
+          const br = await send({ type: 'RELIST_BUY', variant: { filmId: it.filmId, rarity: it.rarity || '', provenance: it.provenance }, price: newPrice });
+          if (br && br.ok) {
+            await send({ type: 'LOAD_ORDERS' });
+            showToast(br.filled ? t('order.relistBuyFilled') : t('order.relistBuyOk'), 'success');
+          } else showToast(t('order.buyModifyFailed'), 'error');
+        } else {
+          const sr = await send({ type: 'SELL_CARD', cardId: it.cardId, isMech: isMechCard(it), netPrice: newPrice });
+          if (sr && sr.ok) { await send({ type: 'LOAD_ORDERS' }); showToast(t('order.modifySuccess'), 'success'); }
+          else showToast(t('order.modifyFailed'), 'error');
+        }
+      };
+      if (isBuyOrder) await promptBuyPrice(it, runModify);
+      else await promptSellPrice(it, runModify);
     }
   } finally { onOrderModify._busy = false; }
 }
@@ -5873,6 +5925,19 @@ function initTradesSearch() {
 
 // 挂单搜索框事件绑定（仅初始化一次）
 function initOrdersSearch() {
+  // 挂买/挂卖互斥单选筛选按钮（排序按钮前）：再点同钮取消；清除按钮重置（ordersFilter 整体重建含 side:null）
+  const clr0 = $('orderSearchClear');
+  if (clr0 && !$('orderSideBuyBtn')) {
+    const mkSide = (side, labelKey) => {
+      const b = el('button', { cls: 'seg-btn mini order-side-btn', attrs: { type: 'button' }, text: t(labelKey) });
+      b.id = side === 'buy' ? 'orderSideBuyBtn' : 'orderSideSellBtn';
+      b.onclick = () => { ordersFilter.side = (ordersFilter.side === side ? null : side); renderOrders(); };
+      clr0.parentNode.insertBefore(b, clr0);
+      return b;
+    };
+    mkSide('buy', 'order.filterBuy');
+    mkSide('sell', 'order.filterSell');
+  }
   const txt = $('orderSearchText');
   if (txt) txt.addEventListener('input', (e) => { ordersFilter.text = e.target.value; renderOrders(); });
   const df = $('orderDateFrom');
@@ -5883,7 +5948,7 @@ function initOrdersSearch() {
   if (ex) ex.addEventListener('change', (e) => { ordersFilter.exact = e.target.checked; renderOrders(); });
   const clr = $('orderSearchClear');
   if (clr) clr.onclick = () => {
-    ordersFilter = { text: '', dateFrom: '', dateTo: '', exact: false, rarities: new Set(), mech: false, titles: new Set() };
+    ordersFilter = { text: '', dateFrom: '', dateTo: '', exact: false, rarities: new Set(), mech: false, titles: new Set(), side: null };
     if (txt) txt.value = '';
     if (df) df.value = '';
     if (dt) dt.value = '';

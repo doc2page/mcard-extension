@@ -159,6 +159,59 @@ function renderAll() {
   applyLabUrl();
 }
 
+// ============ 侧栏变化角标（持久款；同步自 mcard(Docker) app.js v1.3.x） ============
+// 打开面板轻量探测（PROBE_TOTALS，background 5 小请求只拿 total，不写 storage）与本地差值 → 进对应 view 清零。
+// 曾有 applyPatch 实时 diff + 5s 闪现层（Docker），因「进 view 后采集冷却 skip 数据未同步，重开探测仍出差值」造成重复提示烦扰，已撤——只同步探测持久角标形态。
+var viewBadges = { trades: 0, orders: 0, inventory: 0, marketData: 0 };   // 掉落无轻量 total 接口，不做
+var BADGE_BTN = { trades: 'buyHistoryBtn', orders: 'ordersBtn', inventory: 'inventoryBtn', marketData: 'marketDataBtn' };
+
+function badgeSnapshot() {
+  return {
+    trades: (((state || {}).buyHistory) || []).length,
+    orders: (((state || {}).ordersAll) || []).filter((o) => o.status === 'open' && o.side === 'sell').length,
+    inventory: ((((state || {}).inventory) || []).length) + (((((state || {}).mechInventory) || []).filter((m) => !m.isUsed)).length),
+    marketData: (((state || {}).marketHistory) || []).length,
+  };
+}
+
+function renderBadges() {
+  Object.keys(BADGE_BTN).forEach((k) => {
+    const btn = $(BADGE_BTN[k]);
+    if (!btn) return;
+    var b = btn.querySelector('.nav-badge');
+    if (viewBadges[k] > 0) {
+      if (!b) { b = el('span', { cls: 'nav-badge' }); btn.appendChild(b); btn.classList.add('has-badge'); }
+      b.textContent = viewBadges[k] > 99 ? '99+' : String(viewBadges[k]);
+    } else if (b) { b.remove(); btn.classList.remove('has-badge'); }
+  });
+}
+
+// 变化入口（只服务打开面板探测层，累积持久角标）
+function notifyViewDelta(viewKey, delta) {
+  if (!(viewKey in viewBadges) || !delta) return;
+  viewBadges[viewKey] += Math.abs(delta);
+  renderBadges();
+}
+
+// 打开面板轻量探测：PROBE_TOTALS（background 5 小请求只拿 total，8s 冷却）→ 与本地对比 → 持久角标
+function probeAndBadge() {
+  if (!state || !state.mtApiKey) return;
+  const ordersMaxId = (((state.ordersAll) || []).reduce((m, o) => Math.max(m, Number(o.id) || 0), 0));   // 本地最大挂单记录 id（注意 ordersAll 是插入序非时间序，最新在尾部——遍历取 max）
+  send({ type: 'PROBE_TOTALS', ordersMaxId: ordersMaxId }).then((r) => {
+    if (!r || !r.ok || !r.totals) return;
+    const tt = r.totals;
+    const snap = badgeSnapshot();
+    if (tt.trades != null) notifyViewDelta('trades', tt.trades - snap.trades);                       // 交易只会增
+    if (tt.orders != null && tt.orders > 0) notifyViewDelta('orders', tt.orders);                   // 挂单 = lastId 增量新记录数（新挂单；上架/下架/撤单不产生新记录零误报）
+    if (tt.invNormal != null || tt.invMech != null) {
+      const dN = tt.invNormal != null ? Math.abs(tt.invNormal - ((state.inventory) || []).length) : 0;
+      const dM = tt.invMech != null ? Math.abs(tt.invMech - (((state.mechInventory) || []).filter((m) => !m.isUsed)).length) : 0;
+      notifyViewDelta('inventory', dN + dM);                                                        // 持有增减都算（普通+机制合计）
+    }
+    if (tt.marketData != null) notifyViewDelta('marketData', tt.marketData - snap.marketData);       // 市场数据只会增
+  }).catch(() => {});
+}
+
 // ---------- 状态区 ----------
 function renderStatus() {
   if (!state) return;
@@ -411,6 +464,7 @@ function triggerMarketRefresh(force) {
 function toggleView(v) {
   view = v;
   if (v !== 'inventory') redeemMode = null;   // 切出持有 view：退出兑换子模式
+  if (viewBadges[v] !== undefined && viewBadges[v] > 0) { viewBadges[v] = 0; renderBadges(); }  // 进 view 清零持久角标（已看=已知悉）
   if (batchInView && batchInView !== v) clearBatchSelection(false);  // 切 view 清批量选择（renderLive 会重绘新 view）
   // 切视图失效签名缓存：market/trades/orders/inventory 复用同一 grid，非市场视图清子节点但不清 _sig；
   // 若不清，切回市场时 renderCards 会因 sig 未变 + grid 非空误判"无变化"而跳过重绘，残留上一视图卡片
@@ -5683,6 +5737,7 @@ function applyLabUrl() {
   initTokenModal();
   // 加载时刷新市场（统一入口：节流 + spin）
   triggerMarketRefresh();
+  probeAndBadge();   // 轻量探测各 view 差值 → 侧栏角标
 })();
 
 // 交易记录搜索框事件绑定（仅初始化一次）

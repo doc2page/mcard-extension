@@ -357,7 +357,25 @@ body.privacy-on .md-ut-act { filter: blur(5px); }
 .topbar > .budget-bar-wrap .pc-budget.pct-low .pc-budget-val { color: var(--down); }
 .topbar > .budget-bar-wrap .pc-budget-warn { font-size: 9.5px; }
 .my-trades-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
-.my-trades-btn { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; }
+.my-trades-btn { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; position: relative; }
+/* 侧栏变化角标（红底白字胶囊，99+ 封顶，弹入动画；进对应 view 清零） */
+.nav-badge {
+  position: absolute; top: -5px; right: -7px;
+  z-index: 3;
+  min-width: 17px; height: 17px;
+  padding: 0 4px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 999px;
+  background: var(--down);
+  color: #fff;
+  font-size: 10px; font-weight: 800; line-height: 1;
+  font-variant-numeric: tabular-nums;
+  border: 1.5px solid rgba(255, 255, 255, 0.35);
+  box-shadow: 0 3px 8px -2px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+  animation: badgePop 0.25s cubic-bezier(0.3, 1.6, 0.4, 1);
+}
+@keyframes badgePop { from { transform: scale(0); opacity: 0; } to { transform: scale(1); opacity: 1; } }
 .my-trades-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
 .my-trades-btn .mono { font-weight: 700; color: var(--accent); font-size: 15px; line-height: 1; }
 .my-trades-btn.active { border-color: var(--accent); }

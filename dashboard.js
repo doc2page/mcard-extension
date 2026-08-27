@@ -66,7 +66,9 @@ let ordersFilter = { text: '', dateFrom: '', dateTo: '', exact: false, rarities:
 let inventoryFilter = { text: '', rarities: new Set(), mech: false, exact: false, titles: new Set(), source: new Set(), lock: false, showLocked: false }; // 持有卡片筛选（文本 + 稀有度/机制卡/称号/来源/交易锁多选；showLocked=显示手动锁定的卡，默认隐藏）
 
 function send(msg) {
-  return new Promise((resolve) => chrome.runtime.sendMessage(msg, (r) => resolve(r)));
+  // 消费 lastError：消息通道在 sendResponse 前被断（SW 重启/慢响应超时）时回调会带 lastError，
+  // 不读它就抛「Unchecked runtime.lastError」控制台报错（resolve(undefined) 由调用方各自兜底）
+  return new Promise((resolve) => chrome.runtime.sendMessage(msg, (r) => { void chrome.runtime.lastError; resolve(r); }));
 }
 
 // ---------- DOM helpers（不使用 innerHTML） ----------
@@ -193,24 +195,32 @@ function notifyViewDelta(viewKey, delta) {
   renderBadges();
 }
 
-// 打开面板轻量探测：PROBE_TOTALS（background 5 小请求只拿 total，8s 冷却）→ 与本地对比 → 持久角标
+// 打开面板轻量探测：PROBE_TOTALS 发起（SW 立即受理，探测结果经 PROBE_RESULT 推送回来——
+// 串行 5 请求约 10s，走消息通道同步等会被「通道先关」断掉，推送形态天然免疫）
 function probeAndBadge() {
   if (!state || !state.mtApiKey) return;
   const ordersMaxId = (((state.ordersAll) || []).reduce((m, o) => Math.max(m, Number(o.id) || 0), 0));   // 本地最大挂单记录 id（注意 ordersAll 是插入序非时间序，最新在尾部——遍历取 max）
-  send({ type: 'PROBE_TOTALS', ordersMaxId: ordersMaxId }).then((r) => {
-    if (!r || !r.ok || !r.totals) return;
-    const tt = r.totals;
-    const snap = badgeSnapshot();
-    if (tt.trades != null) notifyViewDelta('trades', tt.trades - snap.trades);                       // 交易只会增
-    if (tt.orders != null && tt.orders > 0) notifyViewDelta('orders', tt.orders);                   // 挂单 = lastId 增量新记录数（新挂单；上架/下架/撤单不产生新记录零误报）
-    if (tt.invNormal != null || tt.invMech != null) {
-      const dN = tt.invNormal != null ? Math.abs(tt.invNormal - ((state.inventory) || []).length) : 0;
-      const dM = tt.invMech != null ? Math.abs(tt.invMech - (((state.mechInventory) || []).filter((m) => !m.isUsed)).length) : 0;
-      notifyViewDelta('inventory', dN + dM);                                                        // 持有增减都算（普通+机制合计）
-    }
-    if (tt.marketData != null) notifyViewDelta('marketData', tt.marketData - snap.marketData);       // 市场数据只会增
-  }).catch(() => {});
+  send({ type: 'PROBE_TOTALS', ordersMaxId: ordersMaxId });   // 不等回值（受理即回 started）
 }
+
+// SW 探测完成推送 → 与本地对比 → 持久角标（多面板同开时各自收到、各自更新，无害）
+function onProbeResult(tt) {
+  if (!tt) return;
+  const snap = badgeSnapshot();
+  if (tt.trades != null) notifyViewDelta('trades', tt.trades - snap.trades);                       // 交易只会增
+  if (tt.orders != null && tt.orders > 0) notifyViewDelta('orders', tt.orders);                   // 挂单 = lastId 增量新记录数（新挂单；上架/下架/撤单不产生新记录零误报）
+  if (tt.invNormal != null || tt.invMech != null) {
+    const dN = tt.invNormal != null ? Math.abs(tt.invNormal - ((state.inventory) || []).length) : 0;
+    const dM = tt.invMech != null ? Math.abs(tt.invMech - (((state.mechInventory) || []).filter((m) => !m.isUsed)).length) : 0;
+    notifyViewDelta('inventory', dN + dM);                                                        // 持有增减都算（普通+机制合计）
+  }
+  if (tt.marketData != null) notifyViewDelta('marketData', tt.marketData - snap.marketData);       // 市场数据只会增
+}
+try {
+  chrome.runtime.onMessage.addListener(function (msg) {
+    if (msg && msg.type === 'PROBE_RESULT') onProbeResult(msg.totals);   // 同步处理，不 return true
+  });
+} catch (e) {}
 
 // ---------- 状态区 ----------
 // ---------- 侧栏版本行：当前版本（manifest）+ 最新版本（GitHub releases 实时读，失败直说不强求） ----------

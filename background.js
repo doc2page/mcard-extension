@@ -303,7 +303,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         case 'CANCEL_ORDER':  return sendResponse(await cancelOrder(msg));
         case 'REDEMPTION':    return sendResponse(await redemption(msg));
         case 'RELIST_BUY':    return sendResponse(await relistBuy(msg));
-        case 'PROBE_TOTALS':  return sendResponse(await probeTotals(msg));
+        case 'PROBE_TOTALS': {
+          // 受理即回（探测串行 5 请求约 10s，同步等 sendResponse 会被「通道先关」断掉）；
+          // 完成后经 PROBE_RESULT 推送给所有扩展页面（dashboard 收到后对比本地出角标）
+          probeTotals(msg).then((r) => {
+            if (r && r.ok) chrome.runtime.sendMessage({ type: 'PROBE_RESULT', totals: r.totals }, () => { void chrome.runtime.lastError; });
+          }).catch(() => {});
+          return sendResponse({ ok: true, started: true });
+        }
         case 'LOAD_TRADES':   return sendResponse(await ensureMyTrades(true));
         case 'LOAD_ORDERS':   return sendResponse(await ensureMyOrders(true));
         case 'LOAD_INVENTORY':  return sendResponse(await ensureInventoryData(true));

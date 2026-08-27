@@ -89,7 +89,7 @@
   - **形态注意**：曾有 applyPatch 实时 diff + 5s 闪现层，**已撤**（进 view 后采集冷却 skip 导致重复提示烦扰）——只同步探测持久角标形态
   - 扩展落点：background.js 加 probe 消息（fetch 各接口 total）；dashboard.js 角标渲染 + 进 view 清零
 - [x] **S1[5-9] 定向搜索词条筛选**
-  - Docker：词条结构 `{name, rarities[], titles[], maxPrices{}}`（旧字符串兼容=无筛选）；新增/编辑模态（`+` 与词条 `✎` 共用：片名 + 稀有度勾选+每档最大价 + 称号多选，不选=全要）；runSearch 逐词条查询+前端过滤（勾称号时无称号卡排除，同市场语义）+合并去重；卡册放大镜联动（片名锁定只读、稀有度默认勾该影片未拥有档、已设词条自动转编辑+图标变铅笔）；胶囊按词条名 hash 稳定随机色（深浅主题各配 8 色板，**实色彩底白字**，非色点非 tint——曾两版返工）；卡册 `_sig` 拼入词条名单（加/删词条重绘同步图标）
+  - Docker：词条结构 `{name, rarities[], titles[], maxPrices{}}`（旧字符串兼容=无筛选）；新增/编辑模态（`+` 与词条 `✎` 共用：片名 + 稀有度勾选+每档最大价 + 称号多选，不选=全要）；runSearch 逐词条查询+前端过滤（勾称号时无称号卡排除，同市场语义）+合并去重；卡册放大镜联动（片名锁定只读、稀有度默认勾该影片未拥有档、已设词条自动转编辑+图标变铅笔）；胶囊按词条名 hash 稳定随机色（深浅主题各配 8 色板，**实色彩底白字**，非色点非 tint——曾两版返工）；卡册 `_sig` 拼入词条名单（加/删词条重绘同步图标）；**合并去重 key 必须含 title+lowestAsk**（`filmId|rarity|provenance` 三元组粗 key 会把同款多张挂单压成一张、留价格高的那张——Docker 踩过）；**runSearch 只属定向搜索路径**（词条增删改/切回市场/改 pageSize 触发），普通市场采集（buckets/applyMarketRarity）不经它——改 runSearch 勿顾虑影响普通采集
   - 扩展落点：dashboard.js 词条模态 + runSearch 过滤 + 胶囊配色；背景侧 searchTags 存储结构兼容旧字符串
 - [x] **S1[5-9] 挂买管理补全**
   - Docker：`trader.relistBuy`（纯限价挂买：撤单后 `/api/pt-card/market/buy` 限价重挂，open 即挂上**不撤**、无预算/阈值门——BUY_CARD 是吃单语义 open 即撤+预算门，**不能用于改价重挂**，曾踩坑）；改价按 side 分流（sell=撤+挂卖净价 / buy=撤+relistBuy）；`confirmDialog` 加 `onConfirm` 模式（确认后按钮 loading 禁用 → await 网络操作 → 才关模态；busy 期间 Esc/取消/遮罩全拦）；挂单 view 挂买/挂卖互斥单选筛选按钮（排序按钮前，再点取消，清除按钮重置）

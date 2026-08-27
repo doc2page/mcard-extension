@@ -4937,7 +4937,9 @@ async function runSearch() {
     }
     for (const it of its) {
       const v = it.variant || {};
-      const key = [v.filmId || it.filmId || '', v.rarity || it.rarity || '', v.provenance || it.provenance || ''].join('|');
+      // 去重 key 必须含价格+称号：search 接口返回同片同稀有度的多张挂单（不同价/称号），
+      // 三元组粗 key 会把它们压成一张、留接口返回序第一张（曾表现为"只显示价格高的那张"）
+      const key = [v.filmId || it.filmId || '', v.rarity || it.rarity || '', v.provenance || it.provenance || '', v.title || it.title || '', Number(it.lowestAsk) || 0].join('|');
       if (!seen.has(key)) { seen.add(key); all.push(it); }
     }
   }

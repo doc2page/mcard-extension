@@ -417,6 +417,7 @@ function renderConfig() {
 // ---------- live 部分：间隔标签 + 卡片 ----------
 function renderLive(changedKeys) {
   if (!state) return;
+  document.body.dataset.view = view;   // 同步当前视图到 body（初始加载不经 toggleView；供 CSS 按视图区分，如移动端预算条）
   renderStatus();
   renderProfile();
   renderTokenPanel();
